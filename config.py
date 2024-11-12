@@ -1,6 +1,7 @@
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
+
 class Settings(BaseSettings):
     notion_api_key: str = Field(..., env='NOTION_API_KEY', description="API Key for Notion service")
     groq_api_key: str = Field(..., env='GROQ_API_KEY', description="API Key for Groq chatbot service")

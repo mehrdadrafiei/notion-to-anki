@@ -1,5 +1,5 @@
-from functools import wraps
 import logging
+from functools import wraps
 
 logging.basicConfig(level=logging.ERROR)
 

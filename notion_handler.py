@@ -1,9 +1,12 @@
 
-from typing import List, Dict
+from typing import Dict, List
+
 from notion_client import Client
 from notion_client.errors import APIResponseError, HTTPResponseError
+
 from config import settings
 from exceptions import handle_errors
+
 
 class NotionHandler:
     def get_headings_and_bullets(self) -> List[Dict[str, str]]:

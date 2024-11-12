@@ -1,9 +1,12 @@
 
 import re
+
 from groq import Groq
 from mistralai import Mistral
-from config import settings  
+
+from config import settings
 from exceptions import handle_errors
+
 
 class ChatBot:
     def get_summary(self, prompt: str, model: str = "llama-3.1-8b-instant") -> str:

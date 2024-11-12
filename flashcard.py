@@ -1,8 +1,9 @@
 import csv
 import os
-from typing import List, Dict
+from typing import Dict, List
+
 from chatbots import ChatBot, GroqChatBot, MistralChatBot
-from notion_handler import NotionHandler, NotionClientHandler
+from notion_handler import NotionClientHandler, NotionHandler
 
 NOTION_PAGE_ID = os.getenv("NOTION_PAGE_ID")
 ANKI_OUTPUT_FILE = "anki_flashcards.csv"
