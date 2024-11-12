@@ -3,6 +3,7 @@ from functools import wraps
 
 logging.basicConfig(level=logging.ERROR)
 
+
 def handle_errors(default_return_value=None, exceptions=(Exception,), message="An error occurred"):
     def decorator(func):
         @wraps(func)
@@ -12,5 +13,7 @@ def handle_errors(default_return_value=None, exceptions=(Exception,), message="A
             except exceptions as e:
                 logging.error(f"{message} in {func.__name__}: {e}")
                 return default_return_value
+
         return wrapper
+
     return decorator

@@ -1,4 +1,3 @@
-
 import re
 
 from groq import Groq
@@ -17,9 +16,10 @@ class ChatBot:
         A helper method to extract the summary from the API response, which is common to all chatbots.
         """
         content = response.choices[0].message.content
-        pattern = r'\[\[(.*?)\]\]'  # Matches the content within [[ ]]
+        pattern = r"\[\[(.*?)\]\]"  # Matches the content within [[ ]]
         return re.findall(pattern, content)[0]
-    
+
+
 class GroqChatBot(ChatBot):
     def __init__(self):
         super().__init__()
@@ -32,6 +32,7 @@ class GroqChatBot(ChatBot):
             model=model,
         )
         return self.process_response(summary)
+
 
 class MistralChatBot(ChatBot):
     def __init__(self):
