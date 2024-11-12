@@ -1,6 +1,12 @@
 import csv
+import logging
 import os
+import time
+from functools import wraps
 from typing import Dict, List
+
+from cachetools import TTLCache
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from chatbots import ChatBot, GroqChatBot, MistralChatBot
 from notion_handler import NotionClientHandler, NotionHandler
@@ -10,6 +16,31 @@ ANKI_OUTPUT_FILE = "anki_flashcards.csv"
 PROMPT_PREFIX = (
     "Summarize the following text for the back of an Anki flashcard. Provide only the summary, enclosed in [[ ]]: \n"
 )
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', filename='flashcard_service.log'
+)
+logger = logging.getLogger(__name__)
+
+
+# Rate limiter decorator
+def rate_limit(calls: int, period: int):
+    min_interval = period / calls
+    last_called = [0.0]
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            elapsed = time.time() - last_called[0]
+            if elapsed < min_interval:
+                time.sleep(min_interval - elapsed)
+            last_called[0] = time.time()
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
 
 
 class FlashcardStorage:
@@ -29,12 +60,36 @@ class FlashcardStorage:
         with open(self.anki_output_file, mode="a", newline="", encoding="utf-8") as file:
             writer = csv.writer(file)
             writer.writerow([front, back_with_link])
-            print(f"Flashcard with front: '{front}' created!")
+            logger.info(f"Flashcard with front: '{front}' created!")
 
 
 class FlashcardCreator:
     def __init__(self, flashcard_storage: FlashcardStorage):
         self.flashcard_storage = flashcard_storage
+        self.cache = TTLCache(maxsize=100, ttl=3600)  # Cache responses for 1 hour
+
+    def validate_flashcard_content(self, text: str) -> bool:
+        """Validate flashcard content meets requirements."""
+        if not text or not isinstance(text, str):
+            return False
+        if len(text.strip()) < 3:  # Minimum content length
+            return False
+        if len(text) > 500:  # Maximum content length
+            return False
+        return True
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    @rate_limit(calls=10, period=60)  # 10 calls per minute
+    def get_cached_summary(self, prompt: str, chatbot: ChatBot) -> str:
+        """Get summary with caching and retry logic."""
+        cache_key = f"summary_{hash(prompt)}"
+        if cache_key in self.cache:
+            logger.info(f"Cache hit for prompt: {prompt[:50]}...")
+            return self.cache[cache_key]
+
+        summary = chatbot.get_summary(prompt)
+        self.cache[cache_key] = summary
+        return summary
 
     def create_flashcards(
         self, headings_and_bullets: List[Dict[str, str]], chatbot: ChatBot, batch_size: int = 10
@@ -47,22 +102,34 @@ class FlashcardCreator:
             chatbot: ChatBot instance to generate summaries
             batch_size: Number of flashcards to process in one batch
         """
+        logger.info(f"Starting flashcard creation for {len(headings_and_bullets)} items")
         existing_flashcards = self.flashcard_storage.get_existing_flashcards()
 
         for i in range(0, len(headings_and_bullets), batch_size):
             batch = headings_and_bullets[i : i + batch_size]
+            logger.info(f"Processing batch {i//batch_size + 1}")
+
             for item in batch:
                 front = item["text"]
-                if front in existing_flashcards:
-                    print(f"Skipping already processed flashcard: '{front}'")
+                # Validate content
+                if not self.validate_flashcard_content(front):
+                    logger.warning(f"Invalid content skipped: {front[:50]}...")
                     continue
 
-                prompt = f"{PROMPT_PREFIX} {front}"
-                back = chatbot.get_summary(prompt)
-                back_with_link = f'{back}\n URL: <a href="{item["url"]}">Link</a>'
-                self.flashcard_storage.save_flashcard(front, back_with_link)
+                if front in existing_flashcards:
+                    logger.info(f"Skipping existing flashcard: {front[:50]}...")
+                    continue
 
-        print(f"Flashcards created successfully in '{self.flashcard_storage.anki_output_file}'.")
+                try:
+                    prompt = f"{PROMPT_PREFIX} {front}"
+                    back = self.get_cached_summary(prompt, chatbot)
+                    back_with_link = f'{back}\n URL: <a href="{item["url"]}">Link</a>'
+                    self.flashcard_storage.save_flashcard(front, back_with_link)
+                    logger.info(f"Created flashcard: {front[:50]}...")
+                except Exception as e:
+                    logger.error(f"Error creating flashcard: {str(e)}")
+
+        logger.info(f"Flashcard creation completed in '{self.flashcard_storage.anki_output_file}'")
 
 
 class FlashcardService:
@@ -98,4 +165,4 @@ if __name__ == "__main__":
     service = FlashcardService(notion_handler, chatbot, flashcard_creator)
     service.run()
 
-    print("done!")
+    logger.info("Process completed!")
