@@ -6,7 +6,6 @@ from notion_client import Client
 from groq import Groq
 from mistralai import Mistral
 
-
 NOTION_API_KEY = os.getenv("NOTION_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
@@ -36,7 +35,6 @@ class GroqChatBot(ChatBot):
 class MistralChatBot(ChatBot):
     def __init__(self, api_key: str):
         self.client = Mistral(api_key=api_key)
-
 
     def get_summary(self, prompt: str, model: str = "mistral-large-latest") -> str:
         pattern = r'\[\[(.*?)\]\]'  # This pattern matches text between [[ ]]
@@ -92,25 +90,43 @@ class NotionClientHandler(NotionHandler):
                 "url": f"{self.url}#{block_id}"
             }
 
-
-class FlashcardCreator:
+class FlashcardStorage:
     def __init__(self, anki_output_file: str):
         self.anki_output_file = anki_output_file
 
-    def create_flashcards(self, headings_and_bullets: List[Dict[str, str]], chatbot: ChatBot) -> None:
-        with open(self.anki_output_file, mode='w', newline='', encoding='utf-8') as file:
+    def get_existing_flashcards(self):
+        existing_flashcards = set()
+        if os.path.exists(self.anki_output_file):
+            with open(self.anki_output_file, mode='r', newline='', encoding='utf-8') as file:
+                reader = csv.reader(file)
+                for row in reader:
+                    existing_flashcards.add(row[0])
+        return existing_flashcards
+
+    def save_flashcard(self, front: str, back_with_link: str):
+        with open(self.anki_output_file, mode='a', newline='', encoding='utf-8') as file:
             writer = csv.writer(file)
-            writer.writerow(['Front', 'Back'])
-            for item in headings_and_bullets:
-                front = item['text']
-                prompt = f"{PROMPT_PREFIX} {front}"
-                back = chatbot.get_summary(prompt)
-                back_with_link = f'{back}\n URL: <a href="{item["url"]}">Link</a>'
-                writer.writerow([front, back_with_link])
-                print(f"Flashcard with front: '{front}' created!")
+            writer.writerow([front, back_with_link])
+            print(f"Flashcard with front: '{front}' created!")
 
-        print(f"Flashcards created successfully in '{self.anki_output_file}'.")
+class FlashcardCreator:
+    def __init__(self, flashcard_storage: FlashcardStorage):
+        self.flashcard_storage = flashcard_storage
 
+    def create_flashcards(self, headings_and_bullets: List[Dict[str, str]], chatbot: ChatBot) -> None:
+        existing_flashcards = self.flashcard_storage.get_existing_flashcards()
+        for item in headings_and_bullets:
+            front = item['text']
+            if front in existing_flashcards:
+                print(f"Skipping already processed flashcard: '{front}'")
+                continue  
+            
+            prompt = f"{PROMPT_PREFIX} {front}"
+            back = chatbot.get_summary(prompt)
+            back_with_link = f'{back}\n URL: <a href="{item["url"]}">Link</a>'
+            self.flashcard_storage.save_flashcard(front, back_with_link)
+
+        print(f"Flashcards created successfully in '{self.flashcard_storage.anki_output_file}'.")
 
 class FlashcardService:
     def __init__(self, notion_handler: NotionHandler, chatbot: ChatBot, flashcard_creator: FlashcardCreator):
@@ -122,15 +138,24 @@ class FlashcardService:
         headings_and_bullets = self.notion_handler.get_headings_and_bullets()
         self.flashcard_creator.create_flashcards(headings_and_bullets, self.chatbot)
 
+def chatbot_factory(api_key: str, chatbot_type: str) -> ChatBot:
+    if chatbot_type == "groq":
+        return GroqChatBot(api_key)
+    elif chatbot_type == "mistral":
+        return MistralChatBot(api_key)
+    else:
+        raise ValueError("Unsupported chatbot type")
 
+def notion_handler_factory(api_key: str, page_id: str) -> NotionHandler:
+    return NotionClientHandler(api_key, page_id)
 
 if __name__ == "__main__":
-    notion_handler = NotionClientHandler(NOTION_API_KEY, NOTION_PAGE_ID)
-    groq_chatbot = GroqChatBot(GROQ_API_KEY)
-    mistral_chatbot = MistralChatBot(MISTRAL_API_KEY)
-    flashcard_creator = FlashcardCreator(ANKI_OUTPUT_FILE)
+    notion_handler = notion_handler_factory(NOTION_API_KEY, NOTION_PAGE_ID)
+    chatbot = chatbot_factory(GROQ_API_KEY, "mistral")
+    flashcard_storage = FlashcardStorage(ANKI_OUTPUT_FILE)
+    flashcard_creator = FlashcardCreator(flashcard_storage)
     
-    service = FlashcardService(notion_handler, mistral_chatbot, flashcard_creator)
+    service = FlashcardService(notion_handler, chatbot, flashcard_creator)
     service.run()
 
     print("done!")
