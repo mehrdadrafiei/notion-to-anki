@@ -46,21 +46,30 @@ def rate_limit(calls: int, period: int):
 class FlashcardStorage:
     def __init__(self, anki_output_file: str):
         self.anki_output_file = anki_output_file
+        self.logger = logging.getLogger(__name__)
 
     def get_existing_flashcards(self):
         existing_flashcards = set()
         if os.path.exists(self.anki_output_file):
-            with open(self.anki_output_file, mode="r", newline="", encoding="utf-8") as file:
-                reader = csv.reader(file)
-                for row in reader:
-                    existing_flashcards.add(row[0])
+            try:
+                with open(self.anki_output_file, mode="r", newline="", encoding="utf-8") as file:
+                    reader = csv.reader(file)
+                    for row in reader:
+                        existing_flashcards.add(row[0])
+                self.logger.info(f"Loaded {len(existing_flashcards)} existing flashcards")
+            except Exception as e:
+                self.logger.error(f"Error loading existing flashcards: {str(e)}")
         return existing_flashcards
 
     def save_flashcard(self, front: str, back_with_link: str):
-        with open(self.anki_output_file, mode="a", newline="", encoding="utf-8") as file:
-            writer = csv.writer(file)
-            writer.writerow([front, back_with_link])
-            logger.info(f"Flashcard with front: '{front}' created!")
+        try:
+            with open(self.anki_output_file, mode="a", newline="", encoding="utf-8") as file:
+                writer = csv.writer(file)
+                writer.writerow([front, back_with_link])
+                logger.info(f"Flashcard with front: '{front}' created!")
+        except Exception as e:
+            self.logger.error(f"Error saving flashcard: {str(e)}")
+            raise
 
 
 class FlashcardCreator:
