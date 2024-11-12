@@ -1,13 +1,97 @@
-# Byte-compiled / optimized / DLL files
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-.venv
-.vscode
-*.csv
-
-secrets.env
-*.key
-
+# Virtual Environment
+venv/
+env/
+ENV/
 .env
+.venv
+env.bak/
+venv.bak/
+
+# IDE - VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+.history/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Project specific
+output/
+*.csv
+*.log
+logs/
+temp/
+
+# Misc
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# Secrets and Configuration
+.env
+*.pem
+*.key
+config.local.py
+secrets.json
+
+# Documentation
+docs/_build/
+site/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# Cython debug symbols
+cython_debug/

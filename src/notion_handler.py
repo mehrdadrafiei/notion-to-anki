@@ -4,7 +4,7 @@ from notion_client import Client
 from notion_client.errors import APIResponseError, HTTPResponseError
 
 from config import settings
-from exceptions import handle_errors
+from error_handling import handle_errors
 
 
 class NotionHandler:
@@ -54,3 +54,7 @@ class NotionClientHandler(NotionHandler):
                 "text": block["bulleted_list_item"]["rich_text"][0]["text"]["content"],
                 "url": f"{self.url}#{block_id}",
             }
+
+
+def notion_handler_factory(page_id: str) -> NotionHandler:
+    return NotionClientHandler(page_id)

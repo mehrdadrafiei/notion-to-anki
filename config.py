@@ -19,7 +19,8 @@ class Settings(BaseSettings):
         env_file_encoding = "utf-8"
 
 
-try:
-    settings = Settings()  # This will load from the .env or environment variables
-except ValueError as e:
-    print(f"Error loading configuration: {e}")
+# Create settings instance
+settings = Settings()
+
+# Export settings instance
+__all__ = ['settings']

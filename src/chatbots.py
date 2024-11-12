@@ -4,7 +4,7 @@ from groq import Groq
 from mistralai import Mistral
 
 from config import settings
-from exceptions import AttributeError, IndexError, handle_errors
+from error_handling import handle_errors
 
 
 class ChatBot:
@@ -49,3 +49,12 @@ class MistralChatBot(ChatBot):
             messages=[{"role": "user", "content": prompt}],
         )
         return self.process_response(summary)
+
+
+def chatbot_factory(chatbot_type: str) -> ChatBot:
+    if chatbot_type == "groq":
+        return GroqChatBot()
+    elif chatbot_type == "mistral":
+        return MistralChatBot()
+    else:
+        raise ValueError("Unsupported chatbot type")

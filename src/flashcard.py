@@ -8,10 +8,9 @@ from typing import Dict, List
 from cachetools import TTLCache
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from chatbots import ChatBot, GroqChatBot, MistralChatBot
-from notion_handler import NotionClientHandler, NotionHandler
+from chatbots import ChatBot
+from notion_handler import NotionHandler
 
-NOTION_PAGE_ID = os.getenv("NOTION_PAGE_ID")
 ANKI_OUTPUT_FILE = "anki_flashcards.csv"
 PROMPT_PREFIX = (
     "Summarize the following text for the back of an Anki flashcard. Provide only the summary, enclosed in [[ ]]: \n"
@@ -150,28 +149,3 @@ class FlashcardService:
     def run(self) -> None:
         headings_and_bullets = self.notion_handler.get_headings_and_bullets()
         self.flashcard_creator.create_flashcards(headings_and_bullets, self.chatbot)
-
-
-def chatbot_factory(chatbot_type: str) -> ChatBot:
-    if chatbot_type == "groq":
-        return GroqChatBot()
-    elif chatbot_type == "mistral":
-        return MistralChatBot()
-    else:
-        raise ValueError("Unsupported chatbot type")
-
-
-def notion_handler_factory(page_id: str) -> NotionHandler:
-    return NotionClientHandler(page_id)
-
-
-if __name__ == "__main__":
-    notion_handler = notion_handler_factory(NOTION_PAGE_ID)
-    chatbot = chatbot_factory("mistral")
-    flashcard_storage = FlashcardStorage(ANKI_OUTPUT_FILE)
-    flashcard_creator = FlashcardCreator(flashcard_storage)
-
-    service = FlashcardService(notion_handler, chatbot, flashcard_creator)
-    service.run()
-
-    logger.info("Process completed!")

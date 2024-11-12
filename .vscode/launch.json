@@ -1,0 +1,16 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run Flashcard Service",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "NOTION_PAGE_ID": "11e31763-e3a1-80f3-a384-fca2ade6df44"
+            }
+        }
+    ]
+}
