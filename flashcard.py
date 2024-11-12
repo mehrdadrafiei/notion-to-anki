@@ -1,14 +1,16 @@
 import csv
+import os
+import re
+from typing import List, Dict
 from notion_client import Client
 from groq import Groq
-import os
-from typing import List, Dict
-import re
+from mistralai import Mistral
 
 
 NOTION_API_KEY = os.getenv("NOTION_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-PAGE_ID = "11e31763-e3a1-80f3-a384-fca2ade6df44"
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
+NOTION_PAGE_ID = os.getenv("NOTION_PAGE_ID")
 ANKI_OUTPUT_FILE = "anki_flashcards.csv"
 PROMPT_PREFIX = "Summarize the following text for the back of an Anki flashcard. Provide only the summary, enclosed in [[ ]]: \n"
 
@@ -23,14 +25,35 @@ class GroqChatBot(ChatBot):
     def get_summary(self, prompt: str, model: str = "llama-3.1-8b-instant") -> str:
         pattern = r'\[\[(.*?)\]\]'  # This pattern matches text between [[ ]]
 
-        get_summary = self.client.chat.completions.create(
+        summary = self.client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
             model=model,
         )
-        content = get_summary.choices[0].message.content
+        content = summary.choices[0].message.content
         
         return re.findall(pattern, content)[0] 
 
+class MistralChatBot(ChatBot):
+    def __init__(self, api_key: str):
+        self.client = Mistral(api_key=api_key)
+
+
+    def get_summary(self, prompt: str, model: str = "mistral-large-latest") -> str:
+        pattern = r'\[\[(.*?)\]\]'  # This pattern matches text between [[ ]]
+
+        summary = self.client.chat.complete(
+            model= model,
+            messages = [
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ]
+        )
+        content = summary.choices[0].message.content
+        
+        return re.findall(pattern, content)[0] 
+    
 class NotionHandler:
     def get_headings_and_bullets(self, page_id: str):
         raise NotImplementedError
@@ -90,10 +113,10 @@ class FlashcardCreator:
 
 
 class FlashcardService:
-    def __init__(self):
-        self.notion_handler = NotionClientHandler(NOTION_API_KEY, PAGE_ID)
-        self.chatbot = GroqChatBot(GROQ_API_KEY)
-        self.flashcard_creator = FlashcardCreator(ANKI_OUTPUT_FILE)
+    def __init__(self, notion_handler: NotionHandler, chatbot: ChatBot, flashcard_creator: FlashcardCreator):
+        self.notion_handler = notion_handler
+        self.chatbot = chatbot
+        self.flashcard_creator = flashcard_creator
 
     def run(self) -> None:
         headings_and_bullets = self.notion_handler.get_headings_and_bullets()
@@ -102,7 +125,12 @@ class FlashcardService:
 
 
 if __name__ == "__main__":
-    service = FlashcardService()
+    notion_handler = NotionClientHandler(NOTION_API_KEY, NOTION_PAGE_ID)
+    groq_chatbot = GroqChatBot(GROQ_API_KEY)
+    mistral_chatbot = MistralChatBot(MISTRAL_API_KEY)
+    flashcard_creator = FlashcardCreator(ANKI_OUTPUT_FILE)
+    
+    service = FlashcardService(notion_handler, mistral_chatbot, flashcard_creator)
     service.run()
 
     print("done!")
