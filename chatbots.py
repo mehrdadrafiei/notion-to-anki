@@ -4,13 +4,16 @@ from groq import Groq
 from mistralai import Mistral
 
 from config import settings
-from exceptions import handle_errors
+from exceptions import AttributeError, IndexError, handle_errors
 
 
 class ChatBot:
     def get_summary(self, prompt: str, model: str = "llama-3.1-8b-instant") -> str:
         raise NotImplementedError
 
+    @handle_errors(
+        default_return_value=None, exceptions=(AttributeError, IndexError), message="Error processing response"
+    )
     def process_response(self, response) -> str:
         """
         A helper method to extract the summary from the API response, which is common to all chatbots.

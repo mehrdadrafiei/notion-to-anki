@@ -36,18 +36,31 @@ class FlashcardCreator:
     def __init__(self, flashcard_storage: FlashcardStorage):
         self.flashcard_storage = flashcard_storage
 
-    def create_flashcards(self, headings_and_bullets: List[Dict[str, str]], chatbot: ChatBot) -> None:
-        existing_flashcards = self.flashcard_storage.get_existing_flashcards()
-        for item in headings_and_bullets:
-            front = item["text"]
-            if front in existing_flashcards:
-                print(f"Skipping already processed flashcard: '{front}'")
-                continue
+    def create_flashcards(
+        self, headings_and_bullets: List[Dict[str, str]], chatbot: ChatBot, batch_size: int = 10
+    ) -> None:
+        """
+        Creates flashcards from headings and bullets using the specified chatbot.
 
-            prompt = f"{PROMPT_PREFIX} {front}"
-            back = chatbot.get_summary(prompt)
-            back_with_link = f'{back}\n URL: <a href="{item["url"]}">Link</a>'
-            self.flashcard_storage.save_flashcard(front, back_with_link)
+        Args:
+            headings_and_bullets: List of dictionaries containing text and URLs
+            chatbot: ChatBot instance to generate summaries
+            batch_size: Number of flashcards to process in one batch
+        """
+        existing_flashcards = self.flashcard_storage.get_existing_flashcards()
+
+        for i in range(0, len(headings_and_bullets), batch_size):
+            batch = headings_and_bullets[i : i + batch_size]
+            for item in batch:
+                front = item["text"]
+                if front in existing_flashcards:
+                    print(f"Skipping already processed flashcard: '{front}'")
+                    continue
+
+                prompt = f"{PROMPT_PREFIX} {front}"
+                back = chatbot.get_summary(prompt)
+                back_with_link = f'{back}\n URL: <a href="{item["url"]}">Link</a>'
+                self.flashcard_storage.save_flashcard(front, back_with_link)
 
         print(f"Flashcards created successfully in '{self.flashcard_storage.anki_output_file}'.")
 
