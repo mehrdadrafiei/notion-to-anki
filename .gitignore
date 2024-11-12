@@ -6,3 +6,6 @@ __pycache__/
 .venv
 .vscode
 *.csv
+
+secrets.env
+*.key
