@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flashcard Generator</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-100">
+    <div class="min-h-screen p-8">
+        <div class="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8">
+            <!-- Generator Form -->
+            <div class="bg-white p-8 rounded-lg shadow-md">
+                <h1 class="text-2xl font-bold mb-6 text-center">Flashcard Generator</h1>
+                
+                <form id="flashcardForm" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Notion Page ID</label>
+                        <input type="text" id="notionPageId" required
+                               class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Chatbot Type</label>
+                        <select id="chatbotType" required
+                                class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                            {% for type in chatbot_types %}
+                                <option value="{{ type }}">{{ type|title }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <button type="submit"
+                            class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                        Generate Flashcards
+                    </button>
+                </form>
+
+                <!-- Progress Section -->
+                <div id="progress-section" class="mt-6 hidden">
+                    <h2 class="text-lg font-semibold mb-2">Generation Progress</h2>
+                    <div class="w-full bg-gray-200 rounded-full h-2.5">
+                        <div id="progress-bar" class="bg-indigo-600 h-2.5 rounded-full" style="width: 0%"></div>
+                    </div>
+                    <p id="progress-status" class="mt-2 text-sm text-gray-600"></p>
+                </div>
+
+                <!-- Status and Result -->
+                <div id="status" class="mt-4 hidden">
+                    <div class="flex items-center justify-center">
+                        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+                        <span class="ml-2">Generating flashcards...</span>
+                    </div>
+                </div>
+
+                <div id="result" class="mt-4 hidden">
+                    <div class="p-4 rounded-md">
+                        <p class="text-sm"></p>
+                    </div>
+                </div>
+
+                <!-- Download Button -->
+                <div id="download-section" class="mt-4 hidden">
+                    <button id="download-btn" class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700">
+                        Download Flashcards
+                    </button>
+                </div>
+            </div>
+
+            <!-- Preview and History Section -->
+            <div class="space-y-8">
+                <!-- Preview Section -->
+                <div id="preview-section" class="bg-white p-8 rounded-lg shadow-md hidden">
+                    <h2 class="text-xl font-bold mb-4">Preview</h2>
+                    <div id="preview-cards" class="space-y-4">
+                        <!-- Preview cards will be inserted here -->
+                    </div>
+                </div>
+
+                <!-- History Section -->
+                <div class="bg-white p-8 rounded-lg shadow-md">
+                    <h2 class="text-xl font-bold mb-4">Generation History</h2>
+                    <div id="history-list" class="space-y-4">
+                        <!-- History items will be inserted here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentTaskId = null;
+
+        // Function to update progress
+        async function updateProgress() {
+            if (!currentTaskId) return;
+            
+            try {
+                const response = await fetch(`/task-status/${currentTaskId}`);
+                const data = await response.json();
+                
+                const progressBar = document.getElementById('progress-bar');
+                const progressStatus = document.getElementById('progress-status');
+                
+                progressBar.style.width = `${data.progress}%`;
+                progressStatus.textContent = data.message;
+                
+                if (data.status === 'completed') {
+                    showDownloadButton();
+                    loadPreview();
+                    loadHistory();
+                    return;
+                } else if (data.status === 'failed') {
+                    progressStatus.textContent = `Error: ${data.message}`;
+                    return;
+                }
+                
+                setTimeout(updateProgress, 1000);
+            } catch (error) {
+                console.error('Error updating progress:', error);
+            }
+        }
+
+        // Function to show download button
+        function showDownloadButton() {
+            const downloadSection = document.getElementById('download-section');
+            downloadSection.classList.remove('hidden');
+        }
+
+        // Function to load preview
+        async function loadPreview() {
+            if (!currentTaskId) return;
+            
+            try {
+                const response = await fetch(`/preview-flashcards/${currentTaskId}`);
+                const cards = await response.json();
+                
+                const previewSection = document.getElementById('preview-section');
+                const previewCards = document.getElementById('preview-cards');
+                previewCards.innerHTML = '';
+                
+                cards.forEach(card => {
+                    const cardElement = document.createElement('div');
+                    cardElement.className = 'border rounded-md p-4';
+                    cardElement.innerHTML = `
+                        <p class="font-semibold">Front: ${card.front}</p>
+                        <p class="mt-2">Back: ${card.back}</p>
+                    `;
+                    previewCards.appendChild(cardElement);
+                });
+                
+                previewSection.classList.remove('hidden');
+            } catch (error) {
+                console.error('Error loading preview:', error);
+            }
+        }
+
+        // Function to load history
+        async function loadHistory() {
+            try {
+                const response = await fetch('/generation-history');
+                const history = await response.json();
+                
+                const historyList = document.getElementById('history-list');
+                historyList.innerHTML = '';
+                
+                history.forEach(item => {
+                    const historyItem = document.createElement('div');
+                    historyItem.className = 'border rounded-md p-4';
+                    historyItem.innerHTML = `
+                        <p class="font-semibold">Page ID: ${item.notion_page_id}</p>
+                        <p class="text-sm text-gray-600">Generated: ${new Date(item.timestamp).toLocaleString()}</p>
+                        <p class="text-sm">Status: ${item.status}</p>
+                        <button onclick="downloadFlashcards('${item.task_id}'
+                        <button onclick="downloadFlashcards('${item.task_id}')" 
+                                class="mt-2 py-1 px-3 text-sm text-white bg-indigo-600 hover:bg-indigo-700 rounded">
+                            Download
+                        </button>
+                    `;
+                    historyList.appendChild(historyItem);
+                });
+            } catch (error) {
+                console.error('Error loading history:', error);
+            }
+        }
+
+        // Function to download flashcards
+        async function downloadFlashcards(taskId) {
+            try {
+                window.location.href = `/download/${taskId}`;
+            } catch (error) {
+                console.error('Error downloading flashcards:', error);
+            }
+        }
+
+        // Main form submission handler
+        document.getElementById('flashcardForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const notionPageId = document.getElementById('notionPageId').value;
+            const chatbotType = document.getElementById('chatbotType').value;
+            const statusDiv = document.getElementById('status');
+            const resultDiv = document.getElementById('result');
+            const progressSection = document.getElementById('progress-section');
+            
+            // Reset and show progress section
+            progressSection.classList.remove('hidden');
+            document.getElementById('progress-bar').style.width = '0%';
+            document.getElementById('progress-status').textContent = 'Starting generation...';
+            
+            // Show loading status
+            statusDiv.classList.remove('hidden');
+            resultDiv.classList.add('hidden');
+
+            try {
+                const response = await fetch('/generate-flashcards/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        notion_page_id: notionPageId,
+                        chatbot_type: chatbotType,
+                        output_path: "output/flashcards.csv"
+                    }),
+                });
+
+                const data = await response.json();
+                
+                if (response.ok) {
+                    currentTaskId = data.task_id;
+                    updateProgress();
+                    
+                    resultDiv.querySelector('p').textContent = 'Flashcard generation started successfully!';
+                    resultDiv.querySelector('div').className = 'p-4 rounded-md bg-green-100 text-green-700';
+                } else {
+                    resultDiv.querySelector('p').textContent = `Error: ${data.detail}`;
+                    resultDiv.querySelector('div').className = 'p-4 rounded-md bg-red-100 text-red-700';
+                }
+            } catch (error) {
+                statusDiv.classList.add('hidden');
+                resultDiv.classList.remove('hidden');
+                resultDiv.querySelector('p').textContent = `Error: ${error.message}`;
+                resultDiv.querySelector('div').className = 'p-4 rounded-md bg-red-100 text-red-700';
+            }
+        });
+
+        // Load history on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            loadHistory();
+        });
+
+        // Download button click handler
+        document.getElementById('download-btn').addEventListener('click', () => {
+            if (currentTaskId) {
+                downloadFlashcards(currentTaskId);
+            }
+        });
+    </script>
+</body>
+</html>

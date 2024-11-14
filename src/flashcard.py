@@ -141,11 +141,10 @@ class FlashcardCreator:
 
 
 class FlashcardService:
-    def __init__(self, notion_handler: NotionHandler, chatbot: ChatBot, flashcard_creator: FlashcardCreator):
-        self.notion_handler = notion_handler
+    def __init__(self, notion_content: List[Dict[str, str]], chatbot: ChatBot, flashcard_creator: FlashcardCreator):
+        self.notion_content = notion_content
         self.chatbot = chatbot
         self.flashcard_creator = flashcard_creator
 
     def run(self) -> None:
-        headings_and_bullets = self.notion_handler.get_headings_and_bullets()
-        self.flashcard_creator.create_flashcards(headings_and_bullets, self.chatbot)
+        self.flashcard_creator.create_flashcards(self.notion_content, self.chatbot)

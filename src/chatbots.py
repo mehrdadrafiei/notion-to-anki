@@ -6,6 +6,8 @@ from mistralai import Mistral
 from config import settings
 from error_handling import handle_errors
 
+CHATBOT_LIST = ["groq", "mistral"]
+
 
 class ChatBot:
     def get_summary(self, prompt: str, model: str = "llama-3.1-8b-instant") -> str:

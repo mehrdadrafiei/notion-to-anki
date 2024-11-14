@@ -31,12 +31,13 @@ def main():
         # Initialize components
         storage = FlashcardStorage(anki_output_file=args.output)
         notion_handler = notion_handler_factory(NOTION_PAGE_ID)
+        notion_content = notion_handler.get_headings_and_bullets()
         chatbot = chatbot_factory("groq")
 
         flashcard_creator = FlashcardCreator(flashcard_storage=storage)
 
         # Create and run service
-        service = FlashcardService(notion_handler=notion_handler, chatbot=chatbot, flashcard_creator=flashcard_creator)
+        service = FlashcardService(notion_content=notion_content, chatbot=chatbot, flashcard_creator=flashcard_creator)
 
         print(f"Starting flashcard generation (batch size: {args.batch_size})...")
         service.run()
