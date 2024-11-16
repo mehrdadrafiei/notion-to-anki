@@ -1,8 +1,8 @@
 import csv
-import datetime
 import logging
 import os
 import uuid
+from datetime import datetime
 from typing import Dict, List, Optional
 
 import uvicorn
@@ -142,13 +142,7 @@ async def create_flashcards(request: FlashcardRequest, background_tasks: Backgro
         logger.info(f"Generated task ID: {task_id}")
 
         # Add task to background tasks
-        background_tasks.add_task(
-            generate_flashcards,
-            page_id=request.notion_page_id,
-            output_path=request.output_path,
-            batch_size=request.batch_size,
-            chatbot_type=request.chatbot_type,
-        )
+        background_tasks.add_task(generate_flashcards_task, task_id=task_id, request=request)
 
         return FlashcardResponse(message="Flashcard generation started", task_id=task_id)
 
