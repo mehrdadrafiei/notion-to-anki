@@ -1,3 +1,4 @@
+import asyncio
 import csv
 import logging
 import os
@@ -5,6 +6,7 @@ import time
 from functools import wraps
 from typing import Dict, List
 
+import aiofiles as aiof
 from cachetools import TTLCache
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -30,12 +32,12 @@ def rate_limit(calls: int, period: int):
 
     def decorator(func):
         @wraps(func)
-        def wrapper(*args, **kwargs):
+        async def wrapper(*args, **kwargs):
             elapsed = time.time() - last_called[0]
             if elapsed < min_interval:
-                time.sleep(min_interval - elapsed)
+                await asyncio.sleep(min_interval - elapsed)
             last_called[0] = time.time()
-            return func(*args, **kwargs)
+            return await func(*args, **kwargs)
 
         return wrapper
 
@@ -47,12 +49,12 @@ class FlashcardStorage:
         self.anki_output_file = anki_output_file
         self.logger = logging.getLogger(__name__)
 
-    def get_existing_flashcards(self):
+    async def get_existing_flashcards(self):
         existing_flashcards = set()
         if os.path.exists(self.anki_output_file):
             try:
-                with open(self.anki_output_file, mode="r", newline="", encoding="utf-8") as file:
-                    reader = csv.reader(file)
+                async with aiof.open(self.anki_output_file, mode="r", newline="", encoding="utf-8") as file:
+                    reader = csv.reader(await file.readlines())
                     for row in reader:
                         existing_flashcards.add(row[0])
                 self.logger.info(f"Loaded {len(existing_flashcards)} existing flashcards")
@@ -60,11 +62,11 @@ class FlashcardStorage:
                 self.logger.error(f"Error loading existing flashcards: {str(e)}")
         return existing_flashcards
 
-    def save_flashcard(self, front: str, back_with_link: str):
+    async def save_flashcard(self, front: str, back_with_link: str):
         try:
-            with open(self.anki_output_file, mode="a", newline="", encoding="utf-8") as file:
+            async with aiof.open(self.anki_output_file, mode="a", newline="", encoding="utf-8") as file:
                 writer = csv.writer(file)
-                writer.writerow([front, back_with_link])
+                await writer.writerow([front, back_with_link])
                 logger.info(f"Flashcard with front: '{front}' created!")
         except Exception as e:
             self.logger.error(f"Error saving flashcard: {str(e)}")
@@ -75,6 +77,15 @@ class FlashcardCreator:
     def __init__(self, flashcard_storage: FlashcardStorage):
         self.flashcard_storage = flashcard_storage
         self.cache = TTLCache(maxsize=100, ttl=3600)  # Cache responses for 1 hour
+        self.progress_callback = None
+
+    def set_progress_callback(self, callback):
+        self.progress_callback = callback
+
+    def update_progress(self, processed_items: int, total_items: int, status: str, message: str):
+        if self.progress_callback:
+            progress = int((processed_items / total_items) * 100)
+            self.progress_callback(progress, status, message)
 
     def validate_flashcard_content(self, text: str) -> bool:
         """Validate flashcard content meets requirements."""
@@ -88,18 +99,18 @@ class FlashcardCreator:
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     @rate_limit(calls=10, period=60)  # 10 calls per minute
-    def get_cached_summary(self, prompt: str, chatbot: ChatBot) -> str:
+    async def get_cached_summary(self, prompt: str, chatbot: ChatBot) -> str:
         """Get summary with caching and retry logic."""
         cache_key = f"summary_{hash(prompt)}"
         if cache_key in self.cache:
             logger.info(f"Cache hit for prompt: {prompt[:50]}...")
             return self.cache[cache_key]
 
-        summary = chatbot.get_summary(prompt)
+        summary = await chatbot.get_summary(prompt)
         self.cache[cache_key] = summary
         return summary
 
-    def create_flashcards(
+    async def create_flashcards(
         self, headings_and_bullets: List[Dict[str, str]], chatbot: ChatBot, batch_size: int = 10
     ) -> None:
         """
@@ -111,32 +122,57 @@ class FlashcardCreator:
             batch_size: Number of flashcards to process in one batch
         """
         logger.info(f"Starting flashcard creation for {len(headings_and_bullets)} items")
-        existing_flashcards = self.flashcard_storage.get_existing_flashcards()
+        existing_flashcards = await self.flashcard_storage.get_existing_flashcards()
+        total_items = len(headings_and_bullets)
+        processed_items = 0
 
-        for i in range(0, len(headings_and_bullets), batch_size):
-            batch = headings_and_bullets[i : i + batch_size]
-            logger.info(f"Processing batch {i//batch_size + 1}")
+        for item in headings_and_bullets:
+            front = item["text"]
 
-            for item in batch:
-                front = item["text"]
-                # Validate content
-                if not self.validate_flashcard_content(front):
-                    logger.warning(f"Invalid content skipped: {front[:50]}...")
-                    continue
+            if front in existing_flashcards:
+                processed_items += 1
+                self.update_progress(
+                    processed_items,
+                    total_items,
+                    "processing",
+                    f"Skipped existing flashcard ({processed_items}/{total_items})",
+                )
+                logger.info(f"Skipping existing flashcard: {front[:50]}...")
+                # Add a small delay to ensure WebSocket has time to process
+                await asyncio.sleep(0.1)
+                continue
 
-                if front in existing_flashcards:
-                    logger.info(f"Skipping existing flashcard: {front[:50]}...")
-                    continue
+            # Validate content
+            if not self.validate_flashcard_content(front):
+                logger.warning(f"Invalid content skipped: {front[:50]}...")
+                continue
 
-                try:
-                    prompt = f"{PROMPT_PREFIX} {front}"
-                    back = self.get_cached_summary(prompt, chatbot)
-                    back_with_link = f'{back}\n URL: <a href="{item["url"]}">Link</a>'
-                    self.flashcard_storage.save_flashcard(front, back_with_link)
-                    logger.info(f"Created flashcard: {front[:50]}...")
-                except Exception as e:
-                    logger.error(f"Error creating flashcard: {str(e)}")
+            try:
+                prompt = f"{PROMPT_PREFIX} {front}"
+                back = await self.get_cached_summary(prompt, chatbot)
+                back_with_link = f'{back}\n URL: <a href="{item["url"]}">Link</a>'
+                await self.flashcard_storage.save_flashcard(front, back_with_link)
+                processed_items += 1
+                self.update_progress(
+                    processed_items, total_items, "processing", f"Created flashcard ({processed_items}/{total_items})"
+                )
+                await asyncio.sleep(0.1)
+                logger.info(f"Created flashcard: {front[:50]}...")
 
+            except Exception as e:
+                logger.error(f"Error processing flashcard: {str(e)}")
+                self.update_progress(
+                    processed_items,
+                    total_items,
+                    "warning",
+                    f"Error with flashcard ({processed_items}/{total_items}): {str(e)}",
+                )
+                await asyncio.sleep(0.1)
+
+        # Final progress update
+        self.update_progress(
+            total_items, total_items, "completed", f"Completed processing all {total_items} flashcards"
+        )
         logger.info(f"Flashcard creation completed in '{self.flashcard_storage.anki_output_file}'")
 
 
@@ -146,5 +182,8 @@ class FlashcardService:
         self.chatbot = chatbot
         self.flashcard_creator = flashcard_creator
 
-    def run(self) -> None:
-        self.flashcard_creator.create_flashcards(self.notion_content, self.chatbot)
+    def set_progress_callback(self, callback):
+        self.flashcard_creator.set_progress_callback(callback)
+
+    async def run(self) -> None:
+        await self.flashcard_creator.create_flashcards(self.notion_content, self.chatbot)

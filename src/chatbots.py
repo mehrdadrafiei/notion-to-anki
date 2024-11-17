@@ -1,6 +1,7 @@
+import asyncio
 import re
 
-from groq import Groq
+from groq import AsyncGroq
 from mistralai import Mistral
 
 from config import settings
@@ -10,7 +11,7 @@ CHATBOT_LIST = ["groq", "mistral"]
 
 
 class ChatBot:
-    def get_summary(self, prompt: str, model: str = "llama-3.1-8b-instant") -> str:
+    async def get_summary(self, prompt: str, model: str = "llama-3.1-8b-instant") -> str:
         raise NotImplementedError
 
     @handle_errors(
@@ -28,11 +29,11 @@ class ChatBot:
 class GroqChatBot(ChatBot):
     def __init__(self):
         super().__init__()
-        self.client = Groq(api_key=settings.groq_api_key)
+        self.client = AsyncGroq(api_key=settings.groq_api_key)
 
     @handle_errors(default_return_value="Summary unavailable", message="GroqChatBot failed to summarize")
-    def get_summary(self, prompt: str, model: str = "llama-3.1-8b-instant") -> str:
-        summary = self.client.chat.completions.create(
+    async def get_summary(self, prompt: str, model: str = "llama-3.1-8b-instant") -> str:
+        summary = await self.client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
             model=model,
         )
@@ -45,8 +46,8 @@ class MistralChatBot(ChatBot):
         self.client = Mistral(api_key=settings.mistral_api_key)
 
     @handle_errors(default_return_value="Summary unavailable", message="MistralChatBot failed to summarize")
-    def get_summary(self, prompt: str, model: str = "mistral-large-latest") -> str:
-        summary = self.client.chat.complete(
+    async def get_summary(self, prompt: str, model: str = "mistral-large-latest") -> str:
+        summary = await self.client.chat.complete(
             model=model,
             messages=[{"role": "user", "content": prompt}],
         )

@@ -30,6 +30,7 @@ class NotionClientHandler(NotionHandler):
         exceptions=(APIResponseError, HTTPResponseError),
         message="Error retrieving blocks from Notion",
     )
+    # TODO: Add cache for blocks
     def get_headings_and_bullets(self) -> List[Dict[str, str]]:
         blocks = self.client.blocks.children.list(block_id=self.page_id)
         return [

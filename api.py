@@ -1,3 +1,4 @@
+import asyncio
 import csv
 import logging
 import os
@@ -6,7 +7,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
@@ -15,6 +16,9 @@ from config import settings
 from src.chatbots import CHATBOT_LIST, chatbot_factory
 from src.flashcard import FlashcardCreator, FlashcardService, FlashcardStorage
 from src.notion_handler import notion_handler_factory
+
+# In-memory storage for WebSocket connections
+websocket_connections: Dict[str, WebSocket] = {}
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -59,6 +63,17 @@ class TaskStatus(BaseModel):
     message: str
 
 
+@app.websocket("/ws/{task_id}")
+async def websocket_endpoint(websocket: WebSocket, task_id: str):
+    await websocket.accept()
+    websocket_connections[task_id] = websocket
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        del websocket_connections[task_id]
+
+
 def update_task_progress(task_id: str, progress: int, status: str, message: str):
     tasks[task_id] = {
         "progress": progress,
@@ -66,24 +81,12 @@ def update_task_progress(task_id: str, progress: int, status: str, message: str)
         "message": message,
         "timestamp": datetime.now().isoformat(),
     }
+    logger.info(f"Task {task_id} updated: {progress}% - {status} - {message}")
 
-
-def generate_flashcards(page_id: str, output_path: str, batch_size: int, chatbot_type: str) -> None:
-    try:
-        # Initialize components
-        storage = FlashcardStorage(anki_output_file=output_path)
-        notion_handler = notion_handler_factory(page_id)
-        chatbot = chatbot_factory(chatbot_type)
-        flashcard_creator = FlashcardCreator(flashcard_storage=storage)
-
-        # Create and run service
-        service = FlashcardService(notion_handler=notion_handler, chatbot=chatbot, flashcard_creator=flashcard_creator)
-
-        service.run()
-    except Exception as e:
-        # Log the error
-        print(f"Error in background task: {str(e)}")
-        raise
+    # Send progress update to WebSocket if connected
+    if task_id in websocket_connections:
+        websocket = websocket_connections[task_id]
+        asyncio.create_task(websocket.send_json(tasks[task_id]))
 
 
 async def generate_flashcards_task(task_id: str, request: FlashcardRequest):
@@ -98,16 +101,24 @@ async def generate_flashcards_task(task_id: str, request: FlashcardRequest):
         update_task_progress(task_id, 20, "processing", "Fetching Notion content...")
         notion_content = notion_handler.get_headings_and_bullets()
 
+        # Create progress callback for this specific task
+        def progress_callback(progress: int, status: str, message: str):
+            # Scale progress to be between 20 and 100
+            scaled_progress = 20 + int(progress * 0.8)  # 20% was already completed by fetching content
+            update_task_progress(task_id, scaled_progress, status, message)
+
         update_task_progress(task_id, 40, "processing", "Creating flashcards...")
         flashcard_creator = FlashcardCreator(flashcard_storage=storage)
 
         # Create and run service with progress callback
         service = FlashcardService(notion_content=notion_content, chatbot=chatbot, flashcard_creator=flashcard_creator)
+        service.set_progress_callback(progress_callback)
 
         update_task_progress(task_id, 60, "processing", "Generating flashcards...")
-        service.run()
+        await service.run()
 
         update_task_progress(task_id, 100, "completed", "Flashcards generated successfully!")
+        logger.info(f"Task {task_id} completed successfully.")
 
         # Add to history
         generation_history.append(
