@@ -42,12 +42,17 @@ class FlashcardRequest(BaseModel):
     notion_page_id: str
     output_path: Optional[str] = "output/flashcards.csv"
     batch_size: int = Field(10, gt=0, le=100)  # Positive integer, max 100
-    chatbot_type: str = Field("groq", strip_whitespace=True)
+    use_chatbot: bool = Field(False)
+    chatbot_type: Optional[str] = Field(None, strip_whitespace=True)
 
     @field_validator("chatbot_type")
-    def validate_chatbot_type(cls, value):
-        if value not in CHATBOT_LIST:
-            raise ValueError(f"Invalid chatbot type. Allowed types: {CHATBOT_LIST}")
+    def validate_chatbot_type(cls, value, values):
+        # Only validate chatbot_type if use_chatbot is True
+        if values.data.get('use_chatbot'):
+            if not value:
+                raise ValueError("Chatbot type is required when use_chatbot is True")
+            if value not in CHATBOT_LIST:
+                raise ValueError(f"Invalid chatbot type. Allowed types: {CHATBOT_LIST}")
         return value
 
 
@@ -95,11 +100,11 @@ async def generate_flashcards_task(task_id: str, request: FlashcardRequest):
 
         # Initialize components
         storage = FlashcardStorage(anki_output_file=request.output_path)
-        notion_handler = notion_handler_factory(request.notion_page_id)
+        notion_handler = await notion_handler_factory(request.notion_page_id)
         chatbot = chatbot_factory(request.chatbot_type)
 
         update_task_progress(task_id, 20, "processing", "Fetching Notion content...")
-        notion_content = notion_handler.get_headings_and_bullets()
+        notion_content = await notion_handler.get_headings_and_bullets()
 
         # Create progress callback for this specific task
         def progress_callback(progress: int, status: str, message: str):
@@ -111,7 +116,7 @@ async def generate_flashcards_task(task_id: str, request: FlashcardRequest):
         flashcard_creator = FlashcardCreator(flashcard_storage=storage)
 
         # Create and run service with progress callback
-        service = FlashcardService(notion_content=notion_content, chatbot=chatbot, flashcard_creator=flashcard_creator)
+        service = FlashcardService(flashcard_creator=flashcard_creator, notion_content=notion_content, chatbot=chatbot)
         service.set_progress_callback(progress_callback)
 
         update_task_progress(task_id, 60, "processing", "Generating flashcards...")

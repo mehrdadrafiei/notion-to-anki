@@ -1,5 +1,5 @@
-import asyncio
 import re
+from typing import Optional
 
 from groq import AsyncGroq
 from mistralai import Mistral
@@ -54,10 +54,14 @@ class MistralChatBot(ChatBot):
         return self.process_response(summary)
 
 
-def chatbot_factory(chatbot_type: str) -> ChatBot:
-    if chatbot_type == "groq":
-        return GroqChatBot()
-    elif chatbot_type == "mistral":
-        return MistralChatBot()
+def chatbot_factory(chatbot_type: Optional[str]) -> Optional[ChatBot]:
+    if chatbot_type:
+        match chatbot_type:
+            case "groq":
+                return GroqChatBot()
+            case "mistral":
+                return MistralChatBot()
+            case _:
+                raise ValueError("Unsupported chatbot type")
     else:
-        raise ValueError("Unsupported chatbot type")
+        return None

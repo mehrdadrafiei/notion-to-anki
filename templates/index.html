@@ -21,14 +21,21 @@
                     </div>
 
                     <div>
+                        <label class="block text-sm font-medium text-gray-700">
+                            <input type="checkbox" id="useChatbot" class="mr-2">
+                            Use chatbot to summarize answer
+                        </label>
+                    </div>
+                    
+                    <div id="chatbotTypeContainer" class="hidden">
                         <label class="block text-sm font-medium text-gray-700">Chatbot Type</label>
-                        <select id="chatbotType" required
+                        <select id="chatbotType" disabled
                                 class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
                             {% for type in chatbot_types %}
                                 <option value="{{ type }}">{{ type|title }}</option>
                             {% endfor %}
                         </select>
-                    </div>
+                    </div>                
 
                     <button type="submit"
                             class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
@@ -220,7 +227,8 @@
             e.preventDefault();
 
             const notionPageId = document.getElementById('notionPageId').value;
-            const chatbotType = document.getElementById('chatbotType').value;
+            const useChatbot = document.getElementById('useChatbot').checked;
+            const chatbotType = useChatbot ? document.getElementById('chatbotType').value : null;
             const statusDiv = document.getElementById('status');
             const resultDiv = document.getElementById('result');
             const progressSection = document.getElementById('progress-section');
@@ -243,6 +251,7 @@
                     },
                     body: JSON.stringify({
                         notion_page_id: notionPageId,
+                        user_chatbot: useChatbot,
                         chatbot_type: chatbotType
                     }),
                 });
@@ -269,6 +278,21 @@
                 resultDiv.classList.remove('hidden');
                 resultDiv.querySelector('p').textContent = `Error: ${error.message}`;
                 resultDiv.querySelector('div').className = 'p-4 rounded-md bg-red-100 text-red-700';
+            }
+        });
+
+        document.getElementById('useChatbot').addEventListener('change', function(e) {
+            const chatbotTypeContainer = document.getElementById('chatbotTypeContainer');
+            const chatbotTypeSelect = document.getElementById('chatbotType');
+            
+            if (e.target.checked) {
+                chatbotTypeContainer.classList.remove('hidden');
+                chatbotTypeSelect.disabled = false;
+                chatbotTypeSelect.required = true;
+            } else {
+                chatbotTypeContainer.classList.add('hidden');
+                chatbotTypeSelect.disabled = true;
+                chatbotTypeSelect.required = false;
             }
         });
 

@@ -4,14 +4,13 @@ import logging
 import os
 import time
 from functools import wraps
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import aiofiles as aiof
 from cachetools import TTLCache
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from chatbots import ChatBot
-from notion_handler import NotionHandler
 
 PROMPT_PREFIX = (
     "Summarize the following text for the back of an Anki flashcard. Provide only the summary, enclosed in [[ ]]: \n"
@@ -48,6 +47,7 @@ class FlashcardStorage:
         self.anki_output_file = anki_output_file
         self.logger = logging.getLogger(__name__)
 
+    # TODO: Not using this anymore, update it later.
     async def get_existing_flashcards(self):
         existing_flashcards = set()
         if os.path.exists(self.anki_output_file):
@@ -98,19 +98,24 @@ class FlashcardCreator:
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     @rate_limit(calls=10, period=60)  # 10 calls per minute
-    async def get_cached_summary(self, prompt: str, chatbot: ChatBot) -> str:
+    async def get_cached_summary(self, text: str, chatbot: Optional[ChatBot] = None) -> str:
         """Get summary with caching and retry logic."""
+        prompt = f"{PROMPT_PREFIX} {text}"
         cache_key = f"summary_{hash(prompt)}"
         if cache_key in self.cache:
-            logger.info(f"Cache hit for prompt: {prompt[:50]}...")
+            logger.info(f"Cache hit for prompt: {text[:50]}...")
             return self.cache[cache_key]
+
+        # If no chatbot is provided or chatbot is disabled, return the original prompt
+        if not chatbot:
+            return text
 
         summary = await chatbot.get_summary(prompt)
         self.cache[cache_key] = summary
         return summary
 
     async def create_flashcards(
-        self, headings_and_bullets: List[Dict[str, str]], chatbot: ChatBot, batch_size: int = 10
+        self, headings_and_bullets: List[Dict[str, str]], chatbot: Optional[ChatBot] = None, batch_size: int = 10
     ) -> None:
         """
         Creates flashcards from headings and bullets using the specified chatbot.
@@ -126,7 +131,8 @@ class FlashcardCreator:
         processed_items = 0
 
         for item in headings_and_bullets:
-            front = item["text"]
+            front = item["front"]
+            back = item["back"]
 
             if front in existing_flashcards:
                 processed_items += 1
@@ -147,8 +153,7 @@ class FlashcardCreator:
                 continue
 
             try:
-                prompt = f"{PROMPT_PREFIX} {front}"
-                back = await self.get_cached_summary(prompt, chatbot)
+                back = await self.get_cached_summary(back, chatbot)
                 back_with_link = f'{back}\n URL: <a href="{item["url"]}">Link</a>'
                 await self.flashcard_storage.save_flashcard(front, back_with_link)
                 processed_items += 1
@@ -176,10 +181,15 @@ class FlashcardCreator:
 
 
 class FlashcardService:
-    def __init__(self, notion_content: List[Dict[str, str]], chatbot: ChatBot, flashcard_creator: FlashcardCreator):
+    def __init__(
+        self,
+        flashcard_creator: FlashcardCreator,
+        notion_content: List[Dict[str, str]],
+        chatbot: Optional[ChatBot] = None,
+    ):
+        self.flashcard_creator = flashcard_creator
         self.notion_content = notion_content
         self.chatbot = chatbot
-        self.flashcard_creator = flashcard_creator
 
     def set_progress_callback(self, callback):
         self.flashcard_creator.set_progress_callback(callback)
