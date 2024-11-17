@@ -145,12 +145,16 @@ async def home(request: Request):
 @app.post("/generate-flashcards/", response_model=FlashcardResponse)
 async def create_flashcards(request: FlashcardRequest, background_tasks: BackgroundTasks):
     try:
-        # Create output directory
-        os.makedirs(os.path.dirname(request.output_path), exist_ok=True)
-
         # Generate unique task ID
         task_id = f"task_{uuid.uuid4()}"
         logger.info(f"Generated task ID: {task_id}")
+
+        # Create unique output path for this task
+        output_path = f"output/flashcards_{task_id}.csv"
+        request.output_path = output_path  # Update the request with the unique path
+
+        # Create output directory
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
         # Add task to background tasks
         background_tasks.add_task(generate_flashcards_task, task_id=task_id, request=request)

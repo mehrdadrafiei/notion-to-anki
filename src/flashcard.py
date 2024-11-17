@@ -13,7 +13,6 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from chatbots import ChatBot
 from notion_handler import NotionHandler
 
-ANKI_OUTPUT_FILE = "anki_flashcards.csv"
 PROMPT_PREFIX = (
     "Summarize the following text for the back of an Anki flashcard. Provide only the summary, enclosed in [[ ]]: \n"
 )

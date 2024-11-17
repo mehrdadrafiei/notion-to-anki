@@ -10,7 +10,7 @@
     <div class="min-h-screen p-8">
         <div class="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8">
             <!-- Generator Form -->
-            <div class="bg-white p-8 rounded-lg shadow-md">
+            <div class="bg-white p-8 rounded-lg shadow-md h-full">
                 <h1 class="text-2xl font-bold mb-6 text-center">Flashcard Generator</h1>
                 
                 <form id="flashcardForm" class="space-y-4">
@@ -192,7 +192,24 @@
         // Function to download flashcards
         async function downloadFlashcards(taskId) {
             try {
-                window.location.href = `/download/${taskId}`;
+                const response = await fetch(`/download/${taskId}`);
+                if (response.ok) {
+                    // Create a blob from the response
+                    const blob = await response.blob();
+                    // Create a temporary link element
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `flashcards_${taskId}.csv`;
+                    document.body.appendChild(a);
+                    a.click();
+                    // Cleanup
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                } else {
+                    console.error('Download failed:', await response.text());
+                }
+
             } catch (error) {
                 console.error('Error downloading flashcards:', error);
             }
@@ -213,7 +230,6 @@
             progressSection.classList.remove('hidden');
             document.getElementById('progress-bar').style.width = '0%';
             document.getElementById('progress-status').textContent = 'Starting generation...';
-
             // Show loading status
             statusDiv.classList.add('hidden'); 
             resultDiv.classList.add('hidden');
@@ -227,8 +243,7 @@
                     },
                     body: JSON.stringify({
                         notion_page_id: notionPageId,
-                        chatbot_type: chatbotType,
-                        output_path: "output/flashcards.csv"
+                        chatbot_type: chatbotType
                     }),
                 });
 
