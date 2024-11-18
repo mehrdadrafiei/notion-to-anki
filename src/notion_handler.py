@@ -37,6 +37,12 @@ class NotionClientHandler(NotionHandler):
         message="Error retrieving blocks from Notion",
     )
     async def get_headings_and_bullets(self) -> List[Dict[str, str]]:
+        """
+        Retrieve the headings and bullet points from a Notion page.
+
+        Returns:
+            List[Dict[str, str]]: A list of headings and bullet points.
+        """
         # Retrieve the top-level blocks
         blocks = await self.client.blocks.children.list(block_id=self.page_id)
         results = blocks["results"]
@@ -60,6 +66,7 @@ class NotionClientHandler(NotionHandler):
 
         # Flatten and run the tasks asynchronously
         parsed_blocks = await asyncio.gather(*tasks)
+
         return [block for block in parsed_blocks if block]
 
     def _parse_block(self, block, nested_text="") -> Dict[str, str]:

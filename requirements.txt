@@ -1,4 +1,5 @@
-mistralai
-groq
-pydantic
-aiofiles
+mistralai==1.2.2
+groq==0.12.0
+pydantic==2.9.2
+aiofiles==24.1.0
+cachetools==5.5.0

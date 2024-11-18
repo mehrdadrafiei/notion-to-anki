@@ -106,10 +106,6 @@ class FlashcardCreator:
             logger.info(f"Cache hit for prompt: {text[:50]}...")
             return self.cache[cache_key]
 
-        # If no chatbot is provided or chatbot is disabled, return the original prompt
-        if not chatbot:
-            return text
-
         summary = await chatbot.get_summary(prompt)
         self.cache[cache_key] = summary
         return summary
@@ -153,7 +149,7 @@ class FlashcardCreator:
                 continue
 
             try:
-                back = await self.get_cached_summary(back, chatbot)
+                back = await self.get_cached_summary(back, chatbot) if chatbot else back
                 back_with_link = f'{back}\n URL: <a href="{item["url"]}">Link</a>'
                 await self.flashcard_storage.save_flashcard(front, back_with_link)
                 processed_items += 1
