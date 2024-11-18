@@ -10,7 +10,8 @@ import aiofiles as aiof
 from cachetools import TTLCache
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from chatbots import ChatBot
+from chatbots.base import ChatBot
+from config import settings
 
 PROMPT_PREFIX = (
     "Summarize the following text for the back of an Anki flashcard. Provide only the summary, enclosed in [[ ]]: \n"
@@ -75,7 +76,7 @@ class FlashcardStorage:
 class FlashcardCreator:
     def __init__(self, flashcard_storage: FlashcardStorage):
         self.flashcard_storage = flashcard_storage
-        self.cache = TTLCache(maxsize=100, ttl=3600)  # Cache responses for 1 hour
+        self.cache = TTLCache(maxsize=100, ttl=settings.cache_expiry)  # Cache responses for 1 hour
         self.progress_callback = None
 
     def set_progress_callback(self, callback):
@@ -96,8 +97,8 @@ class FlashcardCreator:
             return False
         return True
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-    @rate_limit(calls=10, period=60)  # 10 calls per minute
+    @retry(stop=stop_after_attempt(settings.max_retries), wait=wait_exponential(multiplier=1, min=4, max=10))
+    @rate_limit(calls=settings.rate_limit_calls, period=settings.rate_limit_period)  # 10 calls per minute
     async def get_cached_summary(self, text: str, chatbot: Optional[ChatBot] = None) -> str:
         """Get summary with caching and retry logic."""
         prompt = f"{PROMPT_PREFIX} {text}"

@@ -1,8 +1,8 @@
 import argparse
 import os
 
+from chatbots.factory import ChatBotFactory
 from config import settings
-from src.chatbots import chatbot_factory
 from src.flashcard import FlashcardCreator, FlashcardService, FlashcardStorage
 from src.notion_handler import notion_handler_factory
 
@@ -32,7 +32,7 @@ def main():
         storage = FlashcardStorage(anki_output_file=args.output)
         notion_handler = notion_handler_factory(NOTION_PAGE_ID)
         notion_content = notion_handler.get_headings_and_bullets()
-        chatbot = chatbot_factory("groq")
+        chatbot = ChatBotFactory.create("groq")
 
         flashcard_creator = FlashcardCreator(flashcard_storage=storage)
 

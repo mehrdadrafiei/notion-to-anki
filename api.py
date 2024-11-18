@@ -12,8 +12,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
 
+from chatbots.factory import ChatBotFactory
 from config import settings
-from src.chatbots import CHATBOT_LIST, chatbot_factory
 from src.flashcard import FlashcardCreator, FlashcardService, FlashcardStorage
 from src.notion_handler import notion_handler_factory
 
@@ -51,8 +51,8 @@ class FlashcardRequest(BaseModel):
         if values.data.get('use_chatbot'):
             if not value:
                 raise ValueError("Chatbot type is required when use_chatbot is True")
-            if value not in CHATBOT_LIST:
-                raise ValueError(f"Invalid chatbot type. Allowed types: {CHATBOT_LIST}")
+            if value not in ChatBotFactory.get_available_chatbots():
+                raise ValueError(f"Invalid chatbot type. Allowed types: {ChatBotFactory.get_available_chatbots()}")
         return value
 
 
@@ -101,7 +101,6 @@ async def generate_flashcards_task(task_id: str, request: FlashcardRequest):
         # Initialize components
         storage = FlashcardStorage(anki_output_file=request.output_path)
         notion_handler = await notion_handler_factory(request.notion_page_id)
-        chatbot = chatbot_factory(request.chatbot_type)
 
         update_task_progress(task_id, 20, "processing", "Fetching Notion content...")
         notion_content = await notion_handler.get_headings_and_bullets()
@@ -115,12 +114,26 @@ async def generate_flashcards_task(task_id: str, request: FlashcardRequest):
         update_task_progress(task_id, 40, "processing", "Creating flashcards...")
         flashcard_creator = FlashcardCreator(flashcard_storage=storage)
 
-        # Create and run service with progress callback
-        service = FlashcardService(flashcard_creator=flashcard_creator, notion_content=notion_content, chatbot=chatbot)
-        service.set_progress_callback(progress_callback)
+        chatbot = None
+        if request.use_chatbot:
+            # Using the factory pattern to create the chatbot instance
+            chatbot = await ChatBotFactory.create(request.chatbot_type)
+            async with chatbot:
+                # Create and run service with progress callback
+                service = FlashcardService(
+                    flashcard_creator=flashcard_creator, notion_content=notion_content, chatbot=chatbot
+                )
+                service.set_progress_callback(progress_callback)
 
-        update_task_progress(task_id, 60, "processing", "Generating flashcards...")
-        await service.run()
+                # update_task_progress(task_id, 60, "processing", "Generating flashcards...")
+                await service.run()
+        else:
+            # Create and run service with progress callback
+            service = FlashcardService(flashcard_creator=flashcard_creator, notion_content=notion_content, chatbot=None)
+            service.set_progress_callback(progress_callback)
+
+            # update_task_progress(task_id, 60, "processing", "Generating flashcards...")
+            await service.run()
 
         update_task_progress(task_id, 100, "completed", "Flashcards generated successfully!")
         logger.info(f"Task {task_id} completed successfully.")
