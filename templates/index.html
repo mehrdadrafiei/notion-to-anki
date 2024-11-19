@@ -232,14 +232,14 @@
             const statusDiv = document.getElementById('status');
             const resultDiv = document.getElementById('result');
             const progressSection = document.getElementById('progress-section');
-            const downloadSection = document.getElementById('download-section'); 
+            const downloadSection = document.getElementById('download-section');
 
             // Reset UI elements
             progressSection.classList.remove('hidden');
             document.getElementById('progress-bar').style.width = '0%';
             document.getElementById('progress-status').textContent = 'Starting generation...';
             // Show loading status
-            statusDiv.classList.add('hidden'); 
+            statusDiv.classList.add('hidden');
             resultDiv.classList.add('hidden');
             downloadSection.classList.add('hidden'); // Hide download button when starting new generation
 
@@ -260,7 +260,7 @@
 
                 if (response.ok) {
                     currentTaskId = data.task_id;
-                    console.log("Task ID received:", currentTaskId); // Add this for debugging
+                    console.log("Task ID received:", currentTaskId);
 
                     // Connect to WebSocket for real-time updates
                     socket = new WebSocket(`ws://${window.location.host}/ws/${currentTaskId}`);
@@ -268,10 +268,21 @@
                         const data = JSON.parse(event.data);
                         updateProgress(data);
                     };
+
+                    // Show loading status
+                    statusDiv.classList.remove('hidden');
+                    resultDiv.classList.add('hidden');
+                    downloadSection.classList.add('hidden');
                 } else {
-                    resultDiv.querySelector('p').textContent = `Error: ${data.detail}`;
-                    resultDiv.querySelector('div').className = 'p-4 rounded-md bg-red-100 text-red-700';
+                    // Handle error responses from the server
+                    statusDiv.classList.add('hidden');
                     resultDiv.classList.remove('hidden');
+                    if (response.status === 429) {
+                        resultDiv.querySelector('p').textContent = data.error;
+                    } else {
+                        resultDiv.querySelector('p').textContent = `Error: ${data.detail}`;
+                    }
+                    resultDiv.querySelector('div').className = 'p-4 rounded-md bg-red-100 text-red-700';
                 }
             } catch (error) {
                 statusDiv.classList.add('hidden');

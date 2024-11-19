@@ -2,6 +2,7 @@ import time
 from collections import defaultdict
 
 from fastapi import Request, Response
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 
@@ -13,15 +14,18 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.requests = defaultdict(list)
 
     async def dispatch(self, request: Request, call_next):
-        client_ip = request.client.host
-        current_time = time.time()
+        # Only apply rate limiting to the generate-flashcards endpoint
+        if request.url.path == "/generate-flashcards/":
+            client_ip = request.client.host
+            current_time = time.time()
 
-        # Remove outdated requests
-        self.requests[client_ip] = [t for t in self.requests[client_ip] if t > current_time - self.period]
+            # Remove outdated requests
+            self.requests[client_ip] = [t for t in self.requests[client_ip] if t > current_time - self.period]
 
-        if len(self.requests[client_ip]) >= self.calls:
-            return Response(status_code=429, content="Rate limit exceeded")
+            if len(self.requests[client_ip]) >= self.calls:
+                return JSONResponse(status_code=429, content={"error": "Rate limit exceeded"})
 
-        self.requests[client_ip].append(current_time)
+            self.requests[client_ip].append(current_time)
+
         response = await call_next(request)
         return response

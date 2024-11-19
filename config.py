@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     groq_api_key: str = Field(..., env="GROQ_API_KEY", description="API Key for Groq chatbot service")
     mistral_api_key: str = Field(..., env="MISTRAL_API_KEY", description="API Key for Mistral chatbot service")
     max_retries: int = 3
-    rate_limit_calls: int = 10
+    rate_limit_calls: int = 5
     rate_limit_period: int = 60
     cache_expiry: int = 3600
 
