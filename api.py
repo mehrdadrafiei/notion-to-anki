@@ -14,7 +14,6 @@ from pydantic import BaseModel, Field, field_validator
 
 from chatbots.factory import ChatBotFactory
 from config import settings
-from middleware.cahching import CachingMiddleware
 from middleware.rate_limiting import RateLimitMiddleware
 from monitoring.health import HealthCheck
 from src.flashcard import FlashcardCreator, FlashcardService
@@ -31,11 +30,9 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Flashcard Generator API", description="API for generating flashcards from Notion pages", version="1.0.0"
 )
+
 # Add rate limiting middleware
 app.add_middleware(RateLimitMiddleware, calls=settings.rate_limit_calls, period=settings.rate_limit_period)
-
-# Add caching middleware
-app.add_middleware(CachingMiddleware)
 
 # Mount static files and templates
 app.mount("/static", StaticFiles(directory="static"), name="static")
