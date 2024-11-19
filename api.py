@@ -14,7 +14,11 @@ from pydantic import BaseModel, Field, field_validator
 
 from chatbots.factory import ChatBotFactory
 from config import settings
-from src.flashcard import FlashcardCreator, FlashcardService, FlashcardStorage
+from middleware.cahching import CachingMiddleware
+from middleware.rate_limiting import RateLimitMiddleware
+from monitoring.health import HealthCheck
+from src.flashcard import FlashcardCreator, FlashcardService
+from src.FlashcardRepository import CSVFlashcardRepository
 from src.notion_handler import notion_handler_factory
 
 # In-memory storage for WebSocket connections
@@ -27,6 +31,11 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Flashcard Generator API", description="API for generating flashcards from Notion pages", version="1.0.0"
 )
+# Add rate limiting middleware
+app.add_middleware(RateLimitMiddleware, calls=settings.rate_limit_calls, period=settings.rate_limit_period)
+
+# Add caching middleware
+app.add_middleware(CachingMiddleware)
 
 # Mount static files and templates
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -76,7 +85,7 @@ async def websocket_endpoint(websocket: WebSocket, task_id: str):
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        del websocket_connections[task_id]
+        websocket_connections.pop(task_id)
 
 
 def update_task_progress(task_id: str, progress: int, status: str, message: str):
@@ -99,7 +108,7 @@ async def generate_flashcards_task(task_id: str, request: FlashcardRequest):
         update_task_progress(task_id, 0, "starting", "Initializing components...")
 
         # Initialize components
-        storage = FlashcardStorage(anki_output_file=request.output_path)
+        flashcard_repository = CSVFlashcardRepository(anki_output_file=request.output_path)
         notion_handler = await notion_handler_factory(request.notion_page_id)
 
         update_task_progress(task_id, 20, "processing", "Fetching Notion content...")
@@ -111,8 +120,8 @@ async def generate_flashcards_task(task_id: str, request: FlashcardRequest):
             scaled_progress = 20 + int(progress * 0.8)  # 20% was already completed by fetching content
             update_task_progress(task_id, scaled_progress, status, message)
 
-        update_task_progress(task_id, 40, "processing", "Creating flashcards...")
-        flashcard_creator = FlashcardCreator(flashcard_storage=storage)
+        update_task_progress(task_id, 20, "processing", "Creating flashcards...")
+        flashcard_creator = FlashcardCreator(flashcard_repository=flashcard_repository)
 
         chatbot = None
         if request.use_chatbot:
@@ -125,14 +134,12 @@ async def generate_flashcards_task(task_id: str, request: FlashcardRequest):
                 )
                 service.set_progress_callback(progress_callback)
 
-                # update_task_progress(task_id, 60, "processing", "Generating flashcards...")
                 await service.run()
         else:
             # Create and run service with progress callback
             service = FlashcardService(flashcard_creator=flashcard_creator, notion_content=notion_content, chatbot=None)
             service.set_progress_callback(progress_callback)
 
-            # update_task_progress(task_id, 60, "processing", "Generating flashcards...")
             await service.run()
 
         update_task_progress(task_id, 100, "completed", "Flashcards generated successfully!")
@@ -238,9 +245,10 @@ async def download_flashcards(task_id: str):
     )
 
 
-@app.get("/health/")
-async def health_check():
-    return {"status": "healthy"}
+@app.get("/health")
+async def health_check(request: Request):
+    async with HealthCheck() as health_check:
+        return await health_check.get_health(request)
 
 
 if __name__ == "__main__":

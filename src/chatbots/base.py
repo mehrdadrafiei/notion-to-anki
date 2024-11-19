@@ -53,7 +53,11 @@ class ChatBot(ABC):
         """
         content = response.choices[0].message.content
         pattern = r"\[\[(.*?)\]\]"  # Matches the content within [[ ]]
-        return re.findall(pattern, content)[0]
+        find_match = re.findall(pattern, content)
+        if find_match:
+            return find_match[0]
+        else:
+            return content
 
     async def __aenter__(self):
         await self.initialize()
