@@ -1,5 +1,9 @@
+from __future__ import annotations
+
 import asyncio
-from typing import Dict, List
+from dataclasses import dataclass
+from enum import Enum, auto
+from typing import Dict, List, Optional, Union
 
 from notion_client import AsyncClient
 from notion_client.errors import APIResponseError, HTTPResponseError
@@ -8,34 +12,112 @@ from config import settings
 from error_handling import handle_errors_decorator
 
 
+class BlockType(Enum):
+    """Enumeration of supported Notion block types."""
+
+    HEADING_1 = auto()
+    HEADING_2 = auto()
+    HEADING_3 = auto()
+    BULLETED_LIST_ITEM = auto()
+    PARAGRAPH = auto()
+
+
+@dataclass
+class NotionBlock:
+    """Represents a parsed Notion block with structured information."""
+
+    type: BlockType
+    text: str
+    url: str
+    nested_text: Optional[str] = None
+
+    @classmethod
+    def from_block_data(cls, block: Dict, base_url: str, nested_text: Optional[str] = None) -> Optional[NotionBlock]:
+        """
+        Factory method to create NotionBlock from Notion API block data.
+
+        Args:
+            block (Dict): Raw block data from Notion API
+            base_url (str): Base URL of the Notion page
+            nested_text (Optional[str], optional): Nested content text. Defaults to None.
+
+        Returns:
+            Optional[NotionBlock]: Parsed Notion block or None if unsupported
+        """
+        block_type = block['type']
+        block_id = block['id'].replace("-", "")
+
+        try:
+            if block_type in ['heading_1', 'heading_2', 'heading_3']:
+                return cls(
+                    type=BlockType[block_type.upper().replace('HEADING_', '')],
+                    text=block[block_type]['text'][0]['text']['content'],
+                    url=f"{base_url}#{block_id}",
+                )
+
+            elif block_type == 'bulleted_list_item':
+                return cls(
+                    type=BlockType.BULLETED_LIST_ITEM,
+                    text=block['bulleted_list_item']['rich_text'][0]['text']['content'],
+                    url=f"{base_url}#{block_id}",
+                    nested_text=nested_text,
+                )
+
+            return None
+
+        except (KeyError, IndexError) as e:
+            # Log the error or handle it appropriately
+            print(f"Error parsing block: {e}")
+            return None
+
+
 class NotionHandler:
+    """Abstract base class for Notion content retrieval."""
+
     async def get_headings_and_bullets(self) -> List[Dict[str, str]]:
-        raise NotImplementedError
+        """
+        Retrieve headings and bullet points from a Notion page.
+
+        Raises:
+            NotImplementedError: This method must be implemented by subclasses.
+        """
+        raise NotImplementedError("Subclass must implement abstract method")
 
 
 class NotionClientHandler(NotionHandler):
+    """Concrete implementation of Notion content retrieval using Notion API."""
+
     def __init__(self, page_id: str):
+        """
+        Initialize NotionClientHandler.
+
+        Args:
+            page_id (str): Unique identifier for the Notion page
+        """
         self.client = AsyncClient(auth=settings.notion_api_key)
         self.page_id = page_id
-        self.url = None
+        self.url: Optional[str] = None
 
-    async def initialize(self):
+    async def initialize(self) -> None:
+        """
+        Initialize the handler by retrieving the page URL.
+        """
         self.url = await self._get_page_url()
 
     @handle_errors_decorator(
         default_return_value=None,
         exceptions=(APIResponseError, HTTPResponseError),
-        message="Error retrieving blocks from Notion",
+        message="Error retrieving page URL from Notion",
     )
-    async def _get_page_url(self) -> str:
+    async def _get_page_url(self) -> Optional[str]:
         """
-        Retrieve the URL of the page.
+        Retrieve the URL of the Notion page.
 
         Returns:
-            str: The URL of the page.
+            Optional[str]: The URL of the page or None if retrieval fails
         """
         page_content = await self.client.pages.retrieve(page_id=self.page_id)
-        return page_content["url"]
+        return page_content.get("url")
 
     @handle_errors_decorator(
         default_return_value=[],
@@ -44,79 +126,95 @@ class NotionClientHandler(NotionHandler):
     )
     async def get_headings_and_bullets(self) -> List[Dict[str, str]]:
         """
-        Retrieve the headings and bullet points from a Notion page.
+        Retrieve headings and bullet points from a Notion page.
 
         Returns:
-            List[Dict[str, str]]: A list of headings and bullet points.
+            List[Dict[str, str]]: Parsed headings and bullet points
         """
-        # Retrieve the top-level blocks
-        blocks = await self.client.blocks.children.list(block_id=self.page_id)
-        results = blocks["results"]
+        if not self.url:
+            await self.initialize()
 
-        async def fetch_nested_blocks(block):
-            # Check if the block has children
-            if block["has_children"]:
-                nested_blocks = await self.client.blocks.children.list(block_id=block["id"])
-                # Combine all child content into one text
-                nested_text = " ".join(
-                    child_block[child_block["type"]]["rich_text"][0]["text"]["content"]
-                    for child_block in nested_blocks["results"]
-                    if "rich_text" in child_block.get(child_block["type"], {})
-                )
-                return self._parse_block(block, nested_text=nested_text)
-            else:
-                return self._parse_block(block)
+        # Retrieve top-level blocks
+        blocks_response = await self.client.blocks.children.list(block_id=self.page_id)
+        results = blocks_response.get('results', [])
 
-        # Create tasks for fetching nested blocks
-        tasks = [fetch_nested_blocks(block) for block in results]
+        async def process_block(block) -> Optional[Dict[str, str]]:
+            """
+            Process a single block, including nested content.
 
-        # Flatten and run the tasks asynchronously
-        parsed_blocks = await asyncio.gather(*tasks)
+            Args:
+                block (Dict): Notion block to process
 
-        return [block for block in parsed_blocks if block]
+            Returns:
+                Optional[Dict[str, str]]: Processed block data
+            """
+            # Fetch nested blocks if available
+            nested_text = ""
+            if block.get('has_children', False):
+                nested_blocks = await self.client.blocks.children.list(block_id=block['id'])
+                nested_text = self._extract_nested_text(nested_blocks.get('results', []))
 
-    def _parse_block(self, block, nested_text="") -> Dict[str, str]:
-        """
-        Parse a block and its nested content into a dictionary.
+            # Parse the block
+            parsed_block = NotionBlock.from_block_data(block, base_url=self.url or "", nested_text=nested_text)
 
-        Args:
-            block (Dict): The block to parse.
-            nested_text (str, optional): The nested text to include. Defaults to "".
+            # Convert parsed block to dictionary format
+            if parsed_block and parsed_block.type in [
+                BlockType.HEADING_1,
+                BlockType.HEADING_2,
+                BlockType.HEADING_3,
+                BlockType.BULLETED_LIST_ITEM,
+            ]:
+                return {
+                    "front": parsed_block.text,
+                    "back": parsed_block.nested_text or parsed_block.text,
+                    "url": parsed_block.url,
+                }
 
-        Returns:
-            Dict[str, str]: The parsed block.
-        """
-        block_type = block["type"]
-        block_id = block["id"].replace("-", "")
+            return None
 
-        if block_type in ["heading_1", "heading_2", "heading_3"]:
-            return {
-                "type": block_type,
-                "text": block[block_type]["text"][0]["text"]["content"],
-                "url": f"{self.url}#{block_id}",
-            }
-        elif block_type == "bulleted_list_item":
-            return {
-                "type": "bullet_point",
-                "front": block["bulleted_list_item"]["rich_text"][0]["text"]["content"],
-                "back": nested_text,  # Include nested text for bullet points
-                "url": f"{self.url}#{block_id}",
-            }
+        # Process blocks concurrently
+        tasks = [process_block(block) for block in results]
+        processed_blocks = await asyncio.gather(*tasks)
+
+        # Filter out None values
+        return [block for block in processed_blocks if block]
 
     def _extract_nested_text(self, children: List[Dict]) -> str:
         """
-        Extract all text from a list of child blocks into a single string.
+        Extract text from child blocks.
+
+        Args:
+            children (List[Dict]): List of child blocks
+
+        Returns:
+            str: Concatenated text from child blocks
         """
         texts = []
+        supported_types = ['paragraph', 'bulleted_list_item', 'heading_1', 'heading_2', 'heading_3']
+
         for child in children:
-            block_type = child["type"]
-            if block_type in ["paragraph", "bulleted_list_item", "heading_1", "heading_2", "heading_3"]:
-                texts.append(child[block_type]["rich_text"][0]["text"]["content"])
+            block_type = child['type']
+            if block_type in supported_types:
+                try:
+                    text = child[block_type]['rich_text'][0]['text']['content']
+                    texts.append(text)
+                except (KeyError, IndexError):
+                    # Silently skip blocks without text
+                    continue
+
         return "\n".join(texts)
 
 
 async def notion_handler_factory(page_id: str) -> NotionHandler:
     """
-    Create a NotionHandler instance based on the provided page ID.
+    Factory function to create a NotionHandler instance.
+
+    Args:
+        page_id (str): Unique identifier for the Notion page
+
+    Returns:
+        NotionHandler: Configured Notion handler
     """
-    return NotionClientHandler(page_id)
+    handler = NotionClientHandler(page_id)
+    await handler.initialize()
+    return handler

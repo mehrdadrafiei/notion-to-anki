@@ -16,8 +16,8 @@ from chatbots.factory import ChatBotFactory
 from config import settings
 from middleware.rate_limiting import RateLimitMiddleware
 from monitoring.health import HealthCheck
+from repositories.FlashcardRepository import CSVFlashcardRepository
 from src.flashcard import FlashcardCreator, FlashcardService
-from src.FlashcardRepository import CSVFlashcardRepository
 from src.notion_handler import notion_handler_factory
 
 # In-memory storage for WebSocket connections
