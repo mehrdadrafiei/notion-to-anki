@@ -17,6 +17,8 @@ class ServiceHealth:
 
 
 class HealthCheck:
+    """Health check service for APIs"""
+
     def __init__(self):
         self.client = httpx.AsyncClient()
 

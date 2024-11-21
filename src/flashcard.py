@@ -11,18 +11,40 @@ from chatbots.base import ChatBot
 from config import settings
 from src.FlashcardRepository import FlashcardRepository
 
-PROMPT_PREFIX = (
-    "Summarize the following text for the back of an Anki flashcard. Provide only the summary, enclosed in [[ ]]: \n"
-)
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', filename='flashcard_service.log'
 )
 logger = logging.getLogger(__name__)
 
+PROMPT_PREFIX = (
+    "Summarize the following text for the back of an Anki flashcard. Provide only the summary, enclosed in [[ ]]: \n"
+)
 
-# Rate limiter decorator
+
+class FlashcardValidator:
+    def validate_flashcard_content(self, text: str) -> bool:
+        """Validate flashcard content meets requirements."""
+        if not text or not isinstance(text, str):
+            return False
+        if len(text.strip()) < 3:  # Minimum content length
+            return False
+        if len(text) > 500:  # Maximum content length
+            return False
+        return True
+
+
+class FlashcardCache:
+    def __init__(self, maxsize: int, ttl: int):
+        self.cache = TTLCache(maxsize=maxsize, ttl=ttl)
+
+    def get_from_cache(self, key: str) -> Optional[str]:
+        return self.cache.get(key, None)
+
+    def add_to_cache(self, key: str, value: str):
+        self.cache[key] = value
+
+
 def rate_limit(calls: int, period: int):
     min_interval = period / calls
     last_called = [0.0]
@@ -44,7 +66,7 @@ def rate_limit(calls: int, period: int):
 class FlashcardCreator:
     def __init__(self, flashcard_repository: FlashcardRepository):
         self.flashcard_repository = flashcard_repository
-        self.cache = TTLCache(maxsize=100, ttl=settings.cache_expiry)  # Cache responses for 1 hour
+        self.cache = FlashcardCache(maxsize=100, ttl=settings.cache_expiry)
         self.progress_callback = None
 
     def set_progress_callback(self, callback):
@@ -55,28 +77,19 @@ class FlashcardCreator:
             progress = int((processed_items / total_items) * 100)
             self.progress_callback(progress, status, message)
 
-    def validate_flashcard_content(self, text: str) -> bool:
-        """Validate flashcard content meets requirements."""
-        if not text or not isinstance(text, str):
-            return False
-        if len(text.strip()) < 3:  # Minimum content length
-            return False
-        if len(text) > 500:  # Maximum content length
-            return False
-        return True
-
     @retry(stop=stop_after_attempt(settings.max_retries), wait=wait_exponential(multiplier=1, min=4, max=10))
     @rate_limit(calls=settings.rate_limit_calls, period=settings.rate_limit_period)  # 10 calls per minute
     async def get_cached_summary(self, text: str, chatbot: Optional[ChatBot] = None) -> str:
         """Get summary with caching and retry logic."""
         prompt = f"{PROMPT_PREFIX} {text}"
         cache_key = f"summary_{hash(prompt)}"
-        if cache_key in self.cache:
+        cached_summary = self.cache.get_from_cache(cache_key)
+        if cached_summary is not None:
             logger.info(f"Cache hit for prompt: {text[:50]}...")
-            return self.cache[cache_key]
+            return cached_summary
 
         summary = await chatbot.get_summary(prompt)
-        self.cache[cache_key] = summary
+        self.cache.add_to_cache(cache_key, summary)
         return summary
 
     async def create_flashcards(
@@ -113,12 +126,13 @@ class FlashcardCreator:
                 continue
 
             # Validate content
-            if not self.validate_flashcard_content(front):
+            flashcard_validator = FlashcardValidator()
+            if not flashcard_validator.validate_flashcard_content(front):
                 logger.warning(f"Invalid content skipped: {front[:50]}...")
                 continue
 
             try:
-                back = await self.get_cached_summary(back, chatbot) if chatbot else back
+                back = await self.get_summary(back, chatbot) if chatbot else back
                 back_with_link = f'{back}\n URL: <a href="{item["url"]}">Link</a>'
                 await self.flashcard_repository.save_flashcard(front, back_with_link)
                 processed_items += 1

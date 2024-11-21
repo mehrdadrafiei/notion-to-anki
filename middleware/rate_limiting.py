@@ -7,14 +7,19 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
+    """Middleware for rate limiting API requests"""
+
     def __init__(self, app, calls: int, period: int):
         super().__init__(app)
         self.calls = calls
         self.period = period
         self.requests = defaultdict(list)
 
-    async def dispatch(self, request: Request, call_next):
-        # Only apply rate limiting to the generate-flashcards endpoint
+    async def dispatch(self, request: Request, call_next) -> Response:
+        """
+        Dispatch the request to the next middleware or the endpoint handler.
+        Only apply rate limiting to the generate-flashcards endpoint
+        """
         if request.url.path == "/generate-flashcards/":
             client_ip = request.headers.get("X-Forwarded-For")
             if client_ip is None:

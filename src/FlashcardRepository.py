@@ -18,6 +18,10 @@ class FlashcardRepository(ABC):
 
 
 class CSVFlashcardRepository(FlashcardRepository):
+    """
+    A class for handling flashcards stored in a CSV file.
+    """
+
     def __init__(self, anki_output_file: str):
         self.anki_output_file = anki_output_file
         self.logger = logging.getLogger(__name__)

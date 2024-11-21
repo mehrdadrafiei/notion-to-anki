@@ -45,6 +45,8 @@ generation_history: List[Dict] = []
 
 
 class FlashcardRequest(BaseModel):
+    """Request schema for generating flashcards"""
+
     notion_page_id: str
     output_path: Optional[str] = "output/flashcards.csv"
     batch_size: int = Field(10, gt=0, le=100)  # Positive integer, max 100
@@ -63,11 +65,15 @@ class FlashcardRequest(BaseModel):
 
 
 class FlashcardResponse(BaseModel):
+    """Response schema for generating flashcards"""
+
     message: str
     task_id: str
 
 
 class TaskStatus(BaseModel):
+    """Task status schema"""
+
     task_id: str
     progress: int
     status: str

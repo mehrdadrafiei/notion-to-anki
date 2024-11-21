@@ -5,7 +5,7 @@ from notion_client import AsyncClient
 from notion_client.errors import APIResponseError, HTTPResponseError
 
 from config import settings
-from error_handling import handle_errors
+from error_handling import handle_errors_decorator
 
 
 class NotionHandler:
@@ -22,16 +22,22 @@ class NotionClientHandler(NotionHandler):
     async def initialize(self):
         self.url = await self._get_page_url()
 
-    @handle_errors(
+    @handle_errors_decorator(
         default_return_value=None,
         exceptions=(APIResponseError, HTTPResponseError),
         message="Error retrieving blocks from Notion",
     )
-    async def _get_page_url(self):
+    async def _get_page_url(self) -> str:
+        """
+        Retrieve the URL of the page.
+
+        Returns:
+            str: The URL of the page.
+        """
         page_content = await self.client.pages.retrieve(page_id=self.page_id)
         return page_content["url"]
 
-    @handle_errors(
+    @handle_errors_decorator(
         default_return_value=[],
         exceptions=(APIResponseError, HTTPResponseError),
         message="Error retrieving blocks from Notion",
@@ -70,6 +76,16 @@ class NotionClientHandler(NotionHandler):
         return [block for block in parsed_blocks if block]
 
     def _parse_block(self, block, nested_text="") -> Dict[str, str]:
+        """
+        Parse a block and its nested content into a dictionary.
+
+        Args:
+            block (Dict): The block to parse.
+            nested_text (str, optional): The nested text to include. Defaults to "".
+
+        Returns:
+            Dict[str, str]: The parsed block.
+        """
         block_type = block["type"]
         block_id = block["id"].replace("-", "")
 
@@ -100,4 +116,7 @@ class NotionClientHandler(NotionHandler):
 
 
 async def notion_handler_factory(page_id: str) -> NotionHandler:
+    """
+    Create a NotionHandler instance based on the provided page ID.
+    """
     return NotionClientHandler(page_id)
