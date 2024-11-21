@@ -1,0 +1,9 @@
+{
+    "python.testing.pytestEnabled": true,
+    "python.testing.pytestArgs": [
+        "--maxfail=3",
+        "--disable-warnings",
+        "tests"  // Replace with your test directory if different
+    ],
+    "python.testing.unittestEnabled": false
+}
