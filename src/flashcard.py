@@ -2,14 +2,15 @@ import asyncio
 import logging
 import time
 from functools import wraps
-from typing import Any, Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from cachetools import TTLCache
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from chatbots.base import ChatBot
 from config import settings
-from repositories.FlashcardRepository import Flashcard, FlashcardRepositoryInterface
+
+from .chatbots.base import ChatBot
+from .repositories.FlashcardRepository import Flashcard, FlashcardRepositoryInterface
 
 
 class FlashcardValidator:

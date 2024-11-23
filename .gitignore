@@ -26,6 +26,7 @@ env/
 ENV/
 .env
 .venv
+.venv_aider_chat
 env.bak/
 venv.bak/
 

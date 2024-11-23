@@ -1,10 +1,11 @@
 import argparse
 import os
 
-from chatbots.factory import ChatBotFactory
 from config import settings
-from src.flashcard import FlashcardCreator, FlashcardService, FlashcardStorage
+from src.chatbots.factory import ChatBotFactory
+from src.flashcard import FlashcardCreator, FlashcardService
 from src.notion_handler import notion_handler_factory
+from src.repositories.FlashcardRepository import CSVFlashcardRepository
 
 NOTION_PAGE_ID = os.getenv("NOTION_PAGE_ID")
 
@@ -29,12 +30,12 @@ def main():
         create_output_directory(args.output)
 
         # Initialize components
-        storage = FlashcardStorage(anki_output_file=args.output)
+        repository = CSVFlashcardRepository(anki_output_file=args.output)
         notion_handler = notion_handler_factory(NOTION_PAGE_ID)
         notion_content = notion_handler.get_headings_and_bullets()
         chatbot = ChatBotFactory.create("groq")
 
-        flashcard_creator = FlashcardCreator(flashcard_storage=storage)
+        flashcard_creator = FlashcardCreator(flashcard_repository=repository)
 
         # Create and run service
         service = FlashcardService(notion_content=notion_content, chatbot=chatbot, flashcard_creator=flashcard_creator)

@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional
 
 from notion_client import AsyncClient
 from notion_client.errors import APIResponseError, HTTPResponseError
 
 from config import settings
-from error_handling import handle_errors_decorator
+
+from .error_handling import handle_errors_decorator
 
 
 class BlockType(Enum):

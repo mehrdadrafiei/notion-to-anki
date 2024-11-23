@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     rate_limit_period: int = Field(60, description="Rate limit time period in seconds")
     cache_expiry: int = Field(3600, description="Cache expiry duration in seconds")
     cache_maxsize: int = Field(100, description="Cache maximum size")
+    environment: str = Field("development", description="Environment for task tracking")
 
     @field_validator('notion_api_key', 'groq_api_key', 'mistral_api_key')
     def validate_api_keys(cls, v: str) -> str:
