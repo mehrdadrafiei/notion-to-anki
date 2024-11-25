@@ -3,108 +3,42 @@ import csv
 import logging
 import os
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Optional, Union
 
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
+from redis.asyncio.cluster import ClusterNode, RedisCluster
+from starlette.middleware.sessions import SessionMiddleware
+from task_manager import TaskManager, TaskTrackerFactory, get_current_user
 
-from chatbots.factory import ChatBotFactory
 from config import settings
 from middleware.rate_limiting import RateLimitMiddleware
 from monitoring.health import HealthCheck
-from repositories.FlashcardRepository import CSVFlashcardRepository
+from src.chatbots.factory import ChatBotFactory
+from src.dependencies.container import cleanup_dependencies, get_task_service, get_websocket_manager, init_dependencies
 from src.flashcard import FlashcardCreator, FlashcardService
 from src.notion_handler import notion_handler_factory
+from src.repositories.FlashcardRepository import CSVFlashcardRepository
+from src.services.task_service import TaskService
+from websockets.manager import WebSocketManager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 
-class WebSocketManager:
-    """Manages WebSocket connections for task progress tracking."""
-
-    def __init__(self):
-        """Initialize WebSocket connections dictionary."""
-        self.connections: Dict[str, WebSocket] = {}
-
-    async def connect(self, task_id: str, websocket: WebSocket):
-        """
-        Establish a WebSocket connection for a specific task.
-
-        Args:
-            task_id (str): Unique identifier for the task
-            websocket (WebSocket): WebSocket connection
-        """
-        await websocket.accept()
-        self.connections[task_id] = websocket
-
-    def disconnect(self, task_id: str):
-        """
-        Remove a WebSocket connection.
-
-        Args:
-            task_id (str): Unique identifier for the task
-        """
-        self.connections.pop(task_id, None)
-
-    async def send_progress(self, task_id: str, progress_data: Dict):
-        """
-        Send progress update to a specific WebSocket connection.
-
-        Args:
-            task_id (str): Unique identifier for the task
-            progress_data (Dict): Progress update information
-        """
-        if task_id in self.connections:
-            websocket = self.connections[task_id]
-            await websocket.send_json(progress_data)
-
-
-class TaskTracker:
-    """Manages task status and history tracking."""
-
-    def __init__(self):
-        """Initialize task tracking structures."""
-        self.tasks: Dict[str, Dict] = {}
-        self.generation_history: List[Dict] = []
-        self.websocket_manager = WebSocketManager()
-
-    def update_task_progress(self, task_id: str, progress: int, status: str, message: str):
-        """
-        Update task progress and log the update.
-
-        Args:
-            task_id (str): Unique identifier for the task
-            progress (int): Current progress percentage
-            status (str): Current task status
-            message (str): Detailed status message
-        """
-        task_update = {
-            "progress": progress,
-            "status": status,
-            "message": message,
-            "timestamp": datetime.now().isoformat(),
-        }
-
-        self.tasks[task_id] = task_update
-        logger.info(f"Task {task_id} updated: {progress}% - {status} - {message}")
-
-        # Send WebSocket update
-        asyncio.create_task(self.websocket_manager.send_progress(task_id, task_update))
-
-    def add_to_history(self, task_details: Dict):
-        """
-        Add task details to generation history.
-
-        Args:
-            task_details (Dict): Details of the completed task
-        """
-        self.generation_history.append(task_details)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    await init_dependencies()
+    yield
+    # Shutdown
+    await cleanup_dependencies()
 
 
 class FlashcardRequest(BaseModel):
@@ -155,25 +89,25 @@ def create_app() -> FastAPI:
         FastAPI: Configured application instance
     """
     app = FastAPI(
-        title="Flashcard Generator API", description="API for generating flashcards from Notion pages", version="1.0.0"
+        title="Flashcard Generator API",
+        description="API for generating flashcards from Notion pages",
+        version="1.0.0",
+        lifespan=lifespan,
     )
-
+    app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
     # Add middleware
     app.add_middleware(RateLimitMiddleware, calls=settings.rate_limit_calls, period=settings.rate_limit_period)
 
     # Mount static files and templates
     app.mount("/static", StaticFiles(directory="static"), name="static")
-
     return app
 
 
-# Global task tracker
-task_tracker = TaskTracker()
 app = create_app()
 templates = Jinja2Templates(directory="templates")
 
 
-async def generate_flashcards_task(task_id: str, request: FlashcardRequest):
+async def generate_flashcards_task(task_service: TaskService, user_id: str, task_id: str, request: FlashcardRequest):
     """
     Background task for generating flashcards.
 
@@ -182,32 +116,26 @@ async def generate_flashcards_task(task_id: str, request: FlashcardRequest):
         request (FlashcardRequest): Flashcard generation request details
     """
     try:
-        task_tracker.update_task_progress(task_id, 0, "starting", "Initializing components...")
-
+        await task_service.update_task_progress(
+            user_id=user_id, task_id=task_id, progress=0, status="starting", message="Initializing components..."
+        )
         # Initialize components
         flashcard_repository = CSVFlashcardRepository(anki_output_file=request.output_path)
-        notion_handler = await notion_handler_factory(request.notion_page_id)
-
-        task_tracker.update_task_progress(task_id, 20, "processing", "Fetching Notion content...")
+        notion_handler = await notion_handler_factory(request.notion_page)
+        await task_service.update_task_progress(
+            user_id=user_id, task_id=task_id, progress=20, status="processing", message="Fetching Notion content..."
+        )
         notion_content = await notion_handler.get_headings_and_bullets()
 
-        def progress_callback(progress: int, status: str, message: str):
-            """
-            Callback to update task progress during flashcard generation.
-
-            Args:
-                progress (int): Current progress percentage
-                status (str): Current status
-                message (str): Detailed status message
-            """
-            scaled_progress = 20 + int(progress * 0.8)  # Scale progress between 20 and 100
-            task_tracker.update_task_progress(task_id, scaled_progress, status, message)
-
-        task_tracker.update_task_progress(task_id, 20, "processing", "Creating flashcards...")
-        flashcard_creator = FlashcardCreator(flashcard_repository=flashcard_repository)
+        await task_service.update_task_progress(
+            user_id=user_id, task_id=task_id, progress=20, status="processing", message="Creating flashcards..."
+        )
+        flashcard_creator = FlashcardCreator(
+            flashcard_repository=flashcard_repository, task_service=task_service, task_id=task_id, user_id=user_id
+        )
 
         # Prepare service with or without chatbot
-        async def run_flashcard_service(chatbot=None):
+        async def run_flashcard_service(chatbot=None) -> Union[str, str]:
             """
             Run flashcard service with optional chatbot.
 
@@ -217,52 +145,63 @@ async def generate_flashcards_task(task_id: str, request: FlashcardRequest):
             service = FlashcardService(
                 flashcard_creator=flashcard_creator, notion_content=notion_content, chatbot=chatbot
             )
-            service.set_progress_callback(progress_callback)
-            await service.run()
+            return await service.run()
 
         if request.use_chatbot:
             chatbot = await ChatBotFactory.create(request.chatbot_type)
             async with chatbot:
-                await run_flashcard_service(chatbot)
+                result_message, result_status = await run_flashcard_service(chatbot)
         else:
-            await run_flashcard_service()
+            result_message, result_status = await run_flashcard_service()
 
-        task_tracker.update_task_progress(task_id, 100, "completed", "Flashcards generated successfully!")
         logger.info(f"Task {task_id} completed successfully.")
 
         # Add to history
-        task_tracker.add_to_history(
+        await task_service.add_to_history(
+            user_id,
             {
                 "task_id": task_id,
-                "notion_page_id": request.notion_page_id,
+                "notion_page": notion_handler.url,
                 "chatbot_type": request.chatbot_type,
                 "output_path": request.output_path,
                 "timestamp": datetime.now().isoformat(),
-                "status": "completed",
-            }
+                "status": result_status,
+            },
         )
 
     except Exception as e:
-        task_tracker.update_task_progress(task_id, 0, "failed", str(e))
+        await task_service.update_task_progress(
+            user_id=user_id, task_id=task_id, progress=0, status="failed", message=str(e)
+        )
         logger.exception(f"Task {task_id} failed")
         raise
 
 
 @app.websocket("/ws/{task_id}")
-async def websocket_endpoint(websocket: WebSocket, task_id: str):
+async def websocket_endpoint(
+    websocket: WebSocket, task_id: str, websocket_manager: WebSocketManager = Depends(get_websocket_manager)
+):
     """
     WebSocket endpoint for real-time task progress updates.
 
     Args:
         websocket (WebSocket): WebSocket connection
         task_id (str): Unique identifier for the task
+        websocket_manager(WebSocketManager): WebSocket connections manager for task progress tracking
     """
-    await task_tracker.websocket_manager.connect(task_id, websocket)
     try:
+        await websocket_manager.connect(task_id, websocket)
         while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        task_tracker.websocket_manager.disconnect(task_id)
+            try:
+                await websocket.receive_text()
+            except WebSocketDisconnect:
+                logger.info(f"WebSocket disconnected for task {task_id}")
+                break
+            except Exception as e:
+                logger.error(f"WebSocket error for task {task_id}: {str(e)}")
+                break
+    finally:
+        websocket_manager.disconnect(task_id)
 
 
 @app.get("/")
@@ -282,13 +221,20 @@ async def home(request: Request):
 
 
 @app.post("/generate-flashcards/", response_model=FlashcardResponse)
-async def create_flashcards(request: FlashcardRequest, background_tasks: BackgroundTasks):
+async def create_flashcards(
+    request: FlashcardRequest,
+    background_tasks: BackgroundTasks,
+    current_user: str = Depends(get_current_user),
+    task_service: TaskService = Depends(get_task_service),
+):
     """
     Endpoint to initiate flashcard generation.
 
     Args:
         request (FlashcardRequest): Flashcard generation request details
         background_tasks (BackgroundTasks): FastAPI background tasks manager
+        current_user (str): user id
+        task_service (TaskService): task_service
 
     Returns:
         FlashcardResponse: Task initiation response
@@ -298,27 +244,37 @@ async def create_flashcards(request: FlashcardRequest, background_tasks: Backgro
         task_id = f"task_{uuid.uuid4()}"
         output_path = f"output/flashcards_{task_id}.csv"
         request.output_path = output_path
-
         # Ensure output directory exists
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-        # Add task to background tasks
-        background_tasks.add_task(generate_flashcards_task, task_id=task_id, request=request)
+        # Create task with initial status
+        await task_service.create_task(
+            user_id=current_user,
+            task_id=task_id,
+            initial_data={"status": "created", "output_path": output_path, "request": request.model_dump()},
+        )
+
+        # Add flashcard generation to background tasks
+        background_tasks.add_task(
+            generate_flashcards_task, task_service=task_service, user_id=current_user, task_id=task_id, request=request
+        )
 
         return FlashcardResponse(message="Flashcard generation started", task_id=task_id)
-
     except Exception as e:
         logger.exception("Failed to initiate flashcard generation")
         raise HTTPException(status_code=500, detail="An error occurred while starting the flashcard generation.")
 
 
 @app.get("/task-status/{task_id}")
-async def get_task_status(task_id: str):
+async def get_task_status(
+    task_id: str, current_user: str = Depends(get_current_user), task_service: TaskService = Depends(get_task_service)
+):
     """
     Retrieve status of a specific task.
 
     Args:
         task_id (str): Unique identifier for the task
+        task_service (TaskService): task_service
 
     Returns:
         Dict: Task status information
@@ -326,29 +282,34 @@ async def get_task_status(task_id: str):
     Raises:
         HTTPException: If task is not found
     """
-    if task_id not in task_tracker.tasks:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return task_tracker.tasks[task_id]
+    return await task_service.get_task_status(current_user, task_id)
 
 
 @app.get("/generation-history")
-async def get_generation_history():
+async def get_generation_history(
+    current_user: str = Depends(get_current_user),
+    limit: int = 50,
+    task_service: TaskService = Depends(get_task_service),
+):
     """
     Retrieve generation history.
 
     Returns:
         List[Dict]: List of past generation tasks
     """
-    return task_tracker.generation_history
+    return await task_service.get_user_history(current_user, limit)
 
 
 @app.get("/preview-flashcards/{task_id}")
-async def preview_flashcards(task_id: str):
+async def preview_flashcards(
+    task_id: str, current_user: str = Depends(get_current_user), task_service: TaskService = Depends(get_task_service)
+):
     """
     Preview first 5 generated flashcards.
 
     Args:
         task_id (str): Unique identifier for the task
+        task_service (TaskService): task_service
 
     Returns:
         List[Dict]: Preview of generated flashcards
@@ -356,13 +317,11 @@ async def preview_flashcards(task_id: str):
     Raises:
         HTTPException: If flashcards are not found or still processing
     """
-    task = task_tracker.tasks.get(task_id)
-    if not task or task["status"] != "completed":
+    task = await task_service.get_task_status(current_user, task_id)
+    if not task or task["status"] not in ["completed", "completed_with_errors"]:
         raise HTTPException(status_code=404, detail="Flashcards not found or still processing")
-
     output_path = f"output/flashcards_{task_id}.csv"
     preview_cards = []
-
     try:
         with open(output_path, 'r', encoding='utf-8') as f:
             reader = csv.reader(f)
@@ -372,17 +331,19 @@ async def preview_flashcards(task_id: str):
                 preview_cards.append({"front": row[0], "back": row[1]})
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
     return preview_cards
 
 
 @app.get("/download/{task_id}")
-async def download_flashcards(task_id: str):
+async def download_flashcards(
+    task_id: str, current_user: str = Depends(get_current_user), task_service: TaskService = Depends(get_task_service)
+):
     """
     Download generated flashcards CSV file.
 
     Args:
         task_id (str): Unique identifier for the task
+        task_service (TaskService) : task_service
 
     Returns:
         Response: CSV file download
@@ -390,18 +351,15 @@ async def download_flashcards(task_id: str):
     Raises:
         HTTPException: If flashcards are not found or an error occurs
     """
-    task = task_tracker.tasks.get(task_id)
-    if not task or task["status"] != "completed":
+    task = await task_service.get_task_status(current_user, task_id)
+    if not task or task["status"] not in ["completed", "completed_with_errors"]:
         raise HTTPException(status_code=404, detail="Flashcards not found or still processing")
-
     output_path = f"output/flashcards_{task_id}.csv"
-
     try:
         with open(output_path, 'rb') as f:
             content = f.read()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
     return Response(
         content=content,
         media_type='text/csv',
@@ -425,4 +383,4 @@ async def health_check(request: Request):
 
 
 if __name__ == "__main__":
-    uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True, ws="websockets", log_level="info")

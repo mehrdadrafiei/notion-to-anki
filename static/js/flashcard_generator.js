@@ -1,6 +1,38 @@
 let currentTaskId = null;
 let socket = null;
 
+function connectWebSocket(taskId) {
+    if (socket) {
+        socket.close();
+    }
+
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${wsProtocol}//${window.location.host}/ws/${taskId}`;
+    console.log("Connecting to WebSocket:", wsUrl);
+    
+    socket = new WebSocket(wsUrl);
+    
+    socket.onopen = function() {
+        console.log("WebSocket connection established");
+    };
+    
+    socket.onmessage = function(event) {
+        console.log("WebSocket message received:", event.data);
+        const data = JSON.parse(event.data);
+        updateProgress(data);
+    };
+    
+    socket.onerror = function(error) {
+        console.error("WebSocket error:", error);
+    };
+    
+    socket.onclose = function(event) {
+        console.log("WebSocket connection closed:", event);
+    };
+    
+    return socket;
+}
+
 // Function to update progress
 function updateProgress(data) {
     const progressBar = document.getElementById('progress-bar');
@@ -14,25 +46,25 @@ function updateProgress(data) {
     progressBar.style.width = `${data.progress}%`;
     progressStatus.textContent = data.message;
 
-    if (data.status === 'completed') {
+    if (data.status === 'completed' || data.status === 'completed_with_errors' || data.status === 'failed') {
         showDownloadButton();
         loadPreview();
         loadHistory();
         socket.close();
 
-        // Show completion message
-        resultDiv.querySelector('p').textContent = "Flashcard generation completed successfully!";
-        resultDiv.querySelector('div').className = 'p-4 rounded-md bg-green-100 text-green-700';
-        resultDiv.classList.remove('hidden');
-    } else if (data.status === 'failed') {
-        progressStatus.textContent = `Error: ${data.message}`;
+        // Clear progress status message
+        progressStatus.textContent = '';
 
-        // Show error message
-        resultDiv.querySelector('p').textContent = `Error: ${data.message}`;
-        resultDiv.querySelector('div').className = 'p-4 rounded-md bg-red-100 text-red-700';
+        // Show result message
+        resultDiv.querySelector('p').textContent = data.message;
+        if (data.status === 'completed') {
+            resultDiv.querySelector('div').className = 'p-4 rounded-md bg-green-100 text-green-700';
+        } else if (data.status === 'completed_with_errors') {
+            resultDiv.querySelector('div').className = 'p-4 rounded-md bg-yellow-100 text-yellow-700';
+        } else if (data.status === 'failed') {
+            resultDiv.querySelector('div').className = 'p-4 rounded-md bg-red-100 text-red-700';
+        }
         resultDiv.classList.remove('hidden');
-
-        socket.close();
     }
 }
 
@@ -77,24 +109,73 @@ async function loadHistory() {
         const history = await response.json();
 
         const historyList = document.getElementById('history-list');
+        if (!historyList) {
+            console.error('History list element not found');
+            return;
+        }
+
+        // Clear existing history
         historyList.innerHTML = '';
 
-        history.forEach(item => {
+        // Sort history by timestamp in descending order
+        const sortedHistory = history.sort((a, b) => 
+            new Date(b.timestamp) - new Date(a.timestamp)
+        );
+
+        sortedHistory.forEach(item => {
             const historyItem = document.createElement('div');
-            historyItem.className = 'border rounded-md p-4';
+            historyItem.className = 'border rounded-md p-4 hover:shadow-md transition-shadow duration-200';
+            
+            // Format the timestamp to be more readable
+            const formattedDate = new Date(item.timestamp).toLocaleString(undefined, {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+
             historyItem.innerHTML = `
-                <p class="font-semibold">Page ID: ${item.notion_page_id}</p>
-                <p class="text-sm text-gray-600">Generated: ${new Date(item.timestamp).toLocaleString()}</p>
-                <p class="text-sm">Status: ${item.status}</p>
-                <button onclick="downloadFlashcards('${item.task_id}')" 
-                        class="mt-2 py-1 px-3 text-sm text-white bg-indigo-600 hover:bg-indigo-700 rounded">
-                    Download
-                </button>
+                <div class="flex justify-between items-start">
+                    <div>
+                        <p class="font-semibold break-all">
+                            <a href="${item.notion_page}" target="_blank" rel="noopener noreferrer">
+                                ${item.notion_page}
+                            </a>
+                        </p>
+                        <p class="text-sm text-gray-600 mt-1">${formattedDate}</p>
+                        <p class="text-sm mt-1">
+                            <span class="px-2 py-1 rounded ${
+                                item.status === 'completed' ? 'bg-green-100 text-green-800' :
+                                item.status === 'completed_with_errors' ? 'bg-yellow-100 text-yellow-800' :
+                                'bg-red-100 text-red-800'
+                            }">
+                                ${item.status.charAt(0).toUpperCase() + item.status.slice(1)}
+                            </span>
+                        </p>
+                    </div>
+                    ${item.status !== 'failed' ? `
+                        <button 
+                            onclick="downloadFlashcards('${item.task_id}')"
+                            class="ml-4 py-1 px-3 text-sm text-white bg-indigo-600 hover:bg-indigo-700 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2">
+                            Download
+                        </button>
+                    ` : ''}
+                </div>
             `;
             historyList.appendChild(historyItem);
         });
     } catch (error) {
         console.error('Error loading history:', error);
+        // Show error message to user
+        const historyList = document.getElementById('history-list');
+        if (historyList) {
+            historyList.innerHTML = `
+                <div class="p-4 rounded-md bg-red-100 text-red-700">
+                    Failed to load history. Please try refreshing the page.
+                </div>
+            `;
+        }
     }
 }
 
@@ -128,7 +209,7 @@ async function downloadFlashcards(taskId) {
 document.getElementById('flashcardForm').addEventListener('submit', async (e) => {
     e.preventDefault();
 
-    const notionPageId = document.getElementById('notionPageId').value;
+    const notionPage = document.getElementById('notionPage').value;
     const useChatbot = document.getElementById('useChatbot').checked;
     const chatbotType = useChatbot ? document.getElementById('chatbotType').value : null;
     const statusDiv = document.getElementById('status');
@@ -152,7 +233,7 @@ document.getElementById('flashcardForm').addEventListener('submit', async (e) =>
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-                notion_page_id: notionPageId,
+                notion_page: notionPage,
                 use_chatbot: useChatbot,
                 chatbot_type: chatbotType
             }),
@@ -165,11 +246,7 @@ document.getElementById('flashcardForm').addEventListener('submit', async (e) =>
             console.log("Task ID received:", currentTaskId);
 
             // Connect to WebSocket for real-time updates
-            socket = new WebSocket(`ws://${window.location.host}/ws/${currentTaskId}`);
-            socket.onmessage = function(event) {
-                const data = JSON.parse(event.data);
-                updateProgress(data);
-            };
+            socket = connectWebSocket(currentTaskId);
 
             // Show loading status
             statusDiv.classList.remove('hidden');

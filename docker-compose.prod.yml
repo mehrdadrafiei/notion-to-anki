@@ -1,0 +1,18 @@
+version: '3.8'
+services:
+  redis-node1:
+    image: bitnami/redis-cluster:latest
+    environment:
+      - REDIS_NODES=3
+    ports:
+      - "7001:7001"
+
+  redis-node2:
+    image: bitnami/redis-cluster:latest
+    ports:
+      - "7002:7002"
+
+  redis-node3:
+    image: bitnami/redis-cluster:latest
+    ports:
+      - "7003:7003"

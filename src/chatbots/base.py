@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 def handle_errors(
-    default_return_value: str = "Summary unavailable",
+    default_return_value: Optional[str] = None,
     exceptions: tuple = (Exception,),
     message: str = "Error in chatbot operation",
 ):
@@ -44,20 +44,28 @@ class ChatBot(ABC):
         """Cleanup any resources"""
         pass
 
-    @handle_errors(
-        default_return_value=None, exceptions=(AttributeError, IndexError), message="Error processing response"
-    )
-    async def process_response(self, response) -> str:
+    @handle_errors(exceptions=(AttributeError, IndexError), message="Error processing response")
+    async def process_response(self, response) -> Optional[str]:
         """
-        A helper method to extract the summary from the API response, which is common to all chatbots.
+        Process the API response, returning None if the summary is invalid or empty.
         """
+        if not response or not hasattr(response, 'choices'):
+            return None
+
         content = response.choices[0].message.content
+        if not content:
+            return None
+
         pattern = r"\[\[(.*?)\]\]"  # Matches the content within [[ ]]
         find_match = re.findall(pattern, content)
+
         if find_match:
-            return find_match[0]
+            summary = find_match[0].strip()
+            return summary if summary else None
         else:
-            return content
+            # If no brackets found, use the whole content if it's not empty
+            content = content.strip()
+            return content if content else None
 
     async def __aenter__(self):
         await self.initialize()

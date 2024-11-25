@@ -2,12 +2,13 @@ import asyncio
 import logging
 import time
 from functools import wraps
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Union
 
 from cachetools import TTLCache
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config import settings
+from src.services.task_service import TaskService
 
 from .chatbots.base import ChatBot
 from .repositories.FlashcardRepository import Flashcard, FlashcardRepositoryInterface
@@ -29,7 +30,14 @@ class FlashcardValidator:
         Returns:
             bool: Whether the text meets validation criteria
         """
-        return text and isinstance(text, str) and min_length <= len(text.strip()) <= max_length
+        if not text or not isinstance(text, str):
+            return False
+
+        text = text.strip()
+        if not text or text == "Summary unavailable":
+            return False
+
+        return min_length <= len(text) <= max_length and text.strip() != "None"
 
 
 class FlashcardCache:
@@ -106,7 +114,14 @@ class FlashcardCreator:
         "Provide only the summary, enclosed in [[ ]]: \n"
     )
 
-    def __init__(self, flashcard_repository: FlashcardRepositoryInterface, cache: Optional[FlashcardCache] = None):
+    def __init__(
+        self,
+        flashcard_repository: FlashcardRepositoryInterface,
+        cache: Optional[FlashcardCache] = None,
+        task_service: Optional[TaskService] = None,
+        task_id: str = None,
+        user_id: str = None,
+    ):
         """
         Initialize FlashcardCreator.
 
@@ -117,30 +132,10 @@ class FlashcardCreator:
         self.flashcard_repository = flashcard_repository
         self.cache = cache or FlashcardCache(maxsize=settings.cache_maxsize, ttl=settings.cache_expiry)
         self.progress_callback: Optional[Callable] = None
+        self.task_service = task_service
         self.logger = logging.getLogger(__name__)
-
-    def set_progress_callback(self, callback: Callable[[int, str, str], None]):
-        """
-        Set a callback for tracking progress.
-
-        Args:
-            callback (Callable): Function to call with progress updates
-        """
-        self.progress_callback = callback
-
-    def _update_progress(self, processed_items: int, total_items: int, status: str, message: str):
-        """
-        Update progress via callback if set.
-
-        Args:
-            processed_items (int): Number of items processed
-            total_items (int): Total number of items
-            status (str): Current status
-            message (str): Detailed message
-        """
-        if self.progress_callback:
-            progress = int((processed_items / total_items) * 100)
-            self.progress_callback(progress, status, message)
+        self.task_id = task_id
+        self.user_id = user_id
 
     @retry(stop=stop_after_attempt(settings.max_retries), wait=wait_exponential(multiplier=1, min=4, max=10))
     @rate_limit(calls=settings.rate_limit_calls, period=settings.rate_limit_period)
@@ -168,13 +163,20 @@ class FlashcardCreator:
         if not chatbot:
             return text
 
-        summary = await chatbot.get_summary(prompt)
-        self.cache.set(cache_key, summary)
-        return summary
+        try:
+            summary = await chatbot.get_summary(prompt)
+
+            if summary:
+                self.cache.set(cache_key, summary)
+                return summary
+            return None
+        except Exception as e:
+            self.logger.error(f"Error getting summary: {e}")
+            return None
 
     async def create_flashcards(
         self, headings_and_bullets: List[Dict[str, str]], chatbot: Optional[ChatBot] = None, batch_size: int = 10
-    ) -> None:
+    ) -> Union[str, str]:
         """
         Create flashcards from provided content.
 
@@ -189,32 +191,53 @@ class FlashcardCreator:
         existing_flashcards = await self.flashcard_repository.get_existing_flashcards()
         total_items = len(headings_and_bullets)
         processed_items = 0
+        skipped_items = 0
 
         for item in headings_and_bullets:
+            processed_items += 1
+
             # Create flashcard
             card = Flashcard(front=item["front"], back=item["back"], url=item["url"])
 
             # Skip existing flashcards
             if card.front in existing_flashcards:
-                processed_items += 1
-                self._update_progress(
-                    processed_items,
-                    total_items,
-                    "processing",
-                    f"Skipped existing flashcard ({processed_items}/{total_items})",
-                )
+                skipped_items += 1
+                if self.task_service:
+                    await self.task_service.update_task_progress(
+                        user_id=self.user_id,
+                        task_id=self.task_id,
+                        progress=int((processed_items / total_items) * 100),
+                        status="processing",
+                        message=f"Skipped existing flashcard ({processed_items}/{total_items})",
+                    )
                 self.logger.info(f"Skipping existing flashcard: {card.front[:50]}...")
                 await asyncio.sleep(0.1)
                 continue
 
             # Validate content
             if not FlashcardValidator.validate_flashcard_content(card.front):
+                skipped_items += 1
                 self.logger.warning(f"Invalid content skipped: {card.front[:50]}...")
                 continue
 
             try:
-                # Summarize back content if chatbot available
-                card.back = await self.get_cached_summary(card.back, chatbot) if chatbot else card.back
+                if chatbot:
+                    # Try to get summary, skip if it fails
+                    summary = await self.get_cached_summary(card.back, chatbot)
+                    if summary is None:
+                        skipped_items += 1
+                        if self.task_service:
+                            await self.task_service.update_task_progress(
+                                user_id=self.user_id,
+                                task_id=self.task_id,
+                                progress=int((processed_items / total_items) * 100),
+                                status="warning",
+                                message=f"Skipped flashcard due to summarization failure ({skipped_items} skipped)",
+                            )
+                        self.logger.warning(f"Skipping flashcard due to summarization failure: {card.front[:50]}...")
+                        continue
+
+                    card.back = summary
 
                 # Append URL to back content
                 card.back += f'\n URL: <a href="{item["url"]}">Link</a>'
@@ -222,29 +245,54 @@ class FlashcardCreator:
                 # Save flashcard
                 await self.flashcard_repository.save_flashcard(card)
 
-                processed_items += 1
-                self._update_progress(
-                    processed_items, total_items, "processing", f"Created flashcard ({processed_items}/{total_items})"
-                )
+                # Update progress after saving
+                if self.task_service:
+                    await self.task_service.update_task_progress(
+                        user_id=self.user_id,
+                        task_id=self.task_id,
+                        progress=int((processed_items / total_items) * 100),
+                        status="processing",
+                        message=f"Created flashcard ({processed_items}/{total_items})",
+                    )
 
-                await asyncio.sleep(0.1)
                 self.logger.info(f"Created flashcard: {card.front[:50]}...")
+                await asyncio.sleep(0.1)
 
             except Exception as e:
+                skipped_items += 1
                 self.logger.error(f"Error processing flashcard: {str(e)}")
-                self._update_progress(
-                    processed_items,
-                    total_items,
-                    "warning",
-                    f"Error with flashcard ({processed_items}/{total_items}): {str(e)}",
-                )
+                if self.task_service:
+                    await self.task_service.update_task_progress(
+                        user_id=self.user_id,
+                        task_id=self.task_id,
+                        progress=int((processed_items / total_items) * 100),
+                        status="warning",
+                        message=f"Error with flashcard ({processed_items}/{total_items}): {str(e)}",
+                    )
                 await asyncio.sleep(0.1)
 
         # Final progress update
-        self._update_progress(
-            total_items, total_items, "completed", f"Completed processing all {total_items} flashcards"
-        )
+        if self.task_service:
+            if skipped_items == total_items:
+                message = "All flashcards failed to generate"
+                status = "failed"
+            elif skipped_items > 0:
+                message = f"Flashcard generation completed with {processed_items - skipped_items} successful and {skipped_items} failed"
+                status = "completed_with_errors"
+            else:
+                message = f"Flashcard generation completed successfully for all {total_items} flashcards"
+                status = "completed"
+
+            await self.task_service.update_task_progress(
+                user_id=self.user_id,
+                task_id=self.task_id,
+                progress=100,
+                status=status,
+                message=message,
+            )
         self.logger.info(f"Flashcard creation completed in '{self.flashcard_repository.anki_output_file}'")
+
+        return message, status
 
 
 class FlashcardService:
@@ -267,16 +315,12 @@ class FlashcardService:
         self.flashcard_creator = flashcard_creator
         self.notion_content = notion_content
         self.chatbot = chatbot
+        self.logger = logging.getLogger(__name__)
 
-    def set_progress_callback(self, callback: Callable[[int, str, str], None]):
-        """
-        Set progress callback for flashcard creation.
-
-        Args:
-            callback (Callable): Progress tracking function
-        """
-        self.flashcard_creator.set_progress_callback(callback)
-
-    async def run(self) -> None:
+    async def run(self) -> Union[str, str]:
         """Execute flashcard creation process."""
-        await self.flashcard_creator.create_flashcards(self.notion_content, self.chatbot)
+        try:
+            return await self.flashcard_creator.create_flashcards(self.notion_content, self.chatbot)
+        except Exception as e:
+            self.logger.error(f"Error in flashcard creation: {e}")
+            raise

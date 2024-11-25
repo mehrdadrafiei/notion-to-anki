@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Dict, List, Optional
@@ -88,7 +89,7 @@ class NotionHandler:
 class NotionClientHandler(NotionHandler):
     """Concrete implementation of Notion content retrieval using Notion API."""
 
-    def __init__(self, page_id: str):
+    def __init__(self, page_id_or_url: str):
         """
         Initialize NotionClientHandler.
 
@@ -96,14 +97,32 @@ class NotionClientHandler(NotionHandler):
             page_id (str): Unique identifier for the Notion page
         """
         self.client = AsyncClient(auth=settings.notion_api_key)
-        self.page_id = page_id
+        self.page_id = self._extract_page_id(page_id_or_url)
         self.url: Optional[str] = None
 
     async def initialize(self) -> None:
         """
         Initialize the handler by retrieving the page URL.
         """
-        self.url = await self._get_page_url()
+        if not self.url:
+            self.url = await self._get_page_url()
+
+    @staticmethod
+    def _extract_page_id(page_id_or_url: str) -> str:
+        """
+        Extract the page ID from a Notion page URL or return the input if it's already a page ID.
+
+        Args:
+            page_id_or_url (str): Notion page ID or URL
+
+        Returns:
+            str: Extracted page ID
+        """
+        if page_id_or_url.startswith("https://www.notion.so/") or page_id_or_url.startswith("https://notion.so/"):
+            match = re.search(r"[a-f0-9]{32}", page_id_or_url)
+            if match:
+                return match.group()
+        return page_id_or_url
 
     @handle_errors_decorator(
         default_return_value=None,

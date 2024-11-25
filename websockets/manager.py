@@ -12,6 +12,7 @@ class WebSocketManager:
     def __init__(self):
         """Initialize WebSocket connections dictionary."""
         self.connections: Dict[str, WebSocket] = {}
+        logger.info("WebSocketManager initialized")
 
     async def connect(self, task_id: str, websocket: WebSocket):
         """
