@@ -240,7 +240,8 @@ document.getElementById('flashcardForm').addEventListener('submit', async (e) =>
         });
 
         const data = await response.json();
-
+        console.log(data);
+        
         if (response.ok) {
             currentTaskId = data.task_id;
             console.log("Task ID received:", currentTaskId);

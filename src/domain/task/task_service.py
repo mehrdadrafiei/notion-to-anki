@@ -8,7 +8,7 @@ from typing import Dict, List, Optional
 from fastapi import HTTPException
 from redis.asyncio import Redis
 
-from websockets.manager import WebSocketManager
+from src.common.websocket import WebSocketManager
 
 logger = logging.getLogger(__name__)
 

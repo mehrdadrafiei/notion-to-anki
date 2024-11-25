@@ -1,4 +1,3 @@
-import asyncio
 import csv
 import logging
 import os
@@ -12,20 +11,20 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, R
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
-from redis.asyncio.cluster import ClusterNode, RedisCluster
 from starlette.middleware.sessions import SessionMiddleware
-from task_manager import TaskManager, TaskTrackerFactory, get_current_user
 
-from config import settings
-from middleware.rate_limiting import RateLimitMiddleware
 from monitoring.health import HealthCheck
-from src.chatbots.factory import ChatBotFactory
-from src.dependencies.container import cleanup_dependencies, get_task_service, get_websocket_manager, init_dependencies
-from src.flashcard import FlashcardCreator, FlashcardService
-from src.notion_handler import notion_handler_factory
+from src.common.websocket import WebSocketManager
+from src.core.auth import get_current_user
+from src.core.config import settings
+from src.core.container import cleanup_dependencies, get_task_service, get_websocket_manager, init_dependencies
+from src.domain.chatbot.factory import ChatBotFactory
+from src.domain.flashcard.flashcard import FlashcardCreator, FlashcardService
+from src.domain.notion.notion_handler import notion_handler_factory
+from src.domain.task.task_service import TaskService
 from src.repositories.FlashcardRepository import CSVFlashcardRepository
-from src.services.task_service import TaskService
-from websockets.manager import WebSocketManager
+
+from ..middleware.rate_limiting import RateLimitMiddleware
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -44,7 +43,7 @@ async def lifespan(app: FastAPI):
 class FlashcardRequest(BaseModel):
     """Request schema for generating flashcards"""
 
-    notion_page_id: str
+    notion_page: str
     output_path: Optional[str] = "output/flashcards.csv"
     batch_size: int = Field(10, gt=0, le=100)  # Positive integer, max 100
     use_chatbot: bool = Field(False)

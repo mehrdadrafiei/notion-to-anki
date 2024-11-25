@@ -9,9 +9,9 @@ from typing import Dict, List, Optional
 from notion_client import AsyncClient
 from notion_client.errors import APIResponseError, HTTPResponseError
 
-from config import settings
+from src.core.config import settings
 
-from .error_handling import handle_errors_decorator
+from ...common.error_handling import handle_errors_decorator
 
 
 class BlockType(Enum):

@@ -7,11 +7,11 @@ from typing import Callable, Dict, List, Optional, Union
 from cachetools import TTLCache
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from config import settings
-from src.services.task_service import TaskService
+from src.core.config import settings
+from src.domain.task.task_service import TaskService
 
-from .chatbots.base import ChatBot
-from .repositories.FlashcardRepository import Flashcard, FlashcardRepositoryInterface
+from ...repositories.FlashcardRepository import Flashcard, FlashcardRepositoryInterface
+from ..chatbot.base import ChatBot
 
 
 class FlashcardValidator:

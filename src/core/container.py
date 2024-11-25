@@ -3,13 +3,12 @@ import asyncio
 import logging
 from typing import Optional
 
-from fastapi import Depends
 from redis.asyncio import Redis, RedisCluster
 from redis.asyncio.cluster import ClusterNode
 
-from config import settings
-from src.services.task_service import TaskService
-from websockets.manager import WebSocketManager
+from src.common.websocket import WebSocketManager
+from src.core.config import settings
+from src.domain.task.task_service import TaskService
 
 logger = logging.getLogger(__name__)
 

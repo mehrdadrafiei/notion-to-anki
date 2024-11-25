@@ -6,8 +6,8 @@ import httpx
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
-from config import settings
-from src.chatbots.factory import ChatBotFactory
+from src.core.config import settings
+from src.domain.chatbot.factory import ChatBotFactory
 
 
 @dataclass

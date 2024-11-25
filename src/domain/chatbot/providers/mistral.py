@@ -2,7 +2,7 @@ from typing import Optional
 
 from mistralai import Mistral
 
-from config import settings
+from src.core.config import settings
 
 from ..base import ChatBot, handle_errors
 
