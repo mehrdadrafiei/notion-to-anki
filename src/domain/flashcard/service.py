@@ -8,7 +8,7 @@ from cachetools import TTLCache
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from src.core.config import settings
-from src.domain.task.task_service import TaskService
+from src.domain.task.service import TaskService
 
 from ...repositories.FlashcardRepository import Flashcard, FlashcardRepositoryInterface
 from ..chatbot.base import ChatBot
@@ -175,7 +175,7 @@ class FlashcardCreator:
             return None
 
     async def create_flashcards(
-        self, headings_and_bullets: List[Dict[str, str]], chatbot: Optional[ChatBot] = None, batch_size: int = 10
+        self, notion_content: List[Dict[str, str]], chatbot: Optional[ChatBot] = None, batch_size: int = 10
     ) -> Union[str, str]:
         """
         Create flashcards from provided content.
@@ -185,15 +185,15 @@ class FlashcardCreator:
             chatbot (Optional[ChatBot], optional): Chatbot for summary generation
             batch_size (int, optional): Number of flashcards to process in batch
         """
-        self.logger.info(f"Starting flashcard creation for {len(headings_and_bullets)} items")
+        self.logger.info(f"Starting flashcard creation for {len(notion_content)} items")
 
         # Retrieve existing flashcards to avoid duplicates
         existing_flashcards = await self.flashcard_repository.get_existing_flashcards()
-        total_items = len(headings_and_bullets)
+        total_items = len(notion_content)
         processed_items = 0
         skipped_items = 0
 
-        for item in headings_and_bullets:
+        for item in notion_content:
             processed_items += 1
 
             # Create flashcard

@@ -106,7 +106,9 @@ async function loadPreview() {
 async function loadHistory() {
     try {
         const response = await fetch('/generation-history');
-        const history = await response.json();
+        const historyData = await response.json();
+
+        let history = historyData.history ? historyData.history : historyData;
 
         const historyList = document.getElementById('history-list');
         if (!historyList) {
@@ -116,6 +118,17 @@ async function loadHistory() {
 
         // Clear existing history
         historyList.innerHTML = '';
+
+        // Handle empty history case
+        if (!history || !Array.isArray(history) || history.length === 0) {
+            historyList.innerHTML = `
+                <div class="p-4 rounded-md bg-gray-100 text-gray-600 text-center">
+                    <p>No flashcard generation history yet.</p>
+                    <p class="text-sm mt-2">Generated flashcards will appear here.</p>
+                </div>
+            `;
+            return;
+        }
 
         // Sort history by timestamp in descending order
         const sortedHistory = history.sort((a, b) => 
@@ -241,7 +254,7 @@ document.getElementById('flashcardForm').addEventListener('submit', async (e) =>
 
         const data = await response.json();
         console.log(data);
-        
+
         if (response.ok) {
             currentTaskId = data.task_id;
             console.log("Task ID received:", currentTaskId);

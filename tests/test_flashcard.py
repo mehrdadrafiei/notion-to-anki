@@ -5,9 +5,13 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from src.api.routes.api import FlashcardRequest, FlashcardResponse, app, generate_flashcards_task, update_task_progress
-
-unittest.TestCase
+from src.api.main import app
+from src.api.routes.flashcard_routes import (
+    FlashcardRequest,
+    FlashcardResponse,
+    generate_flashcards_task,
+    update_task_progress,
+)
 
 client = TestClient(app)
 
@@ -34,7 +38,7 @@ def mock_repository():
 class TestFlashcardCreator:
 
     async def test_validate_flashcard_content(self, mock_repository):
-        from src.domain.flashcard.flashcard import FlashcardCreator
+        from src.domain.flashcard.service import FlashcardCreator
 
         creator = FlashcardCreator(mock_repository)
 
@@ -51,7 +55,7 @@ class TestFlashcardCreator:
 
     @unittest.skip("Skipping test_get_cached_summary")
     async def test_get_cached_summary(self, mock_repository, mock_chatbot):
-        from src.domain.flashcard.flashcard import FlashcardCreator
+        from src.domain.flashcard.service import FlashcardCreator
 
         creator = FlashcardCreator(mock_repository)
 
@@ -76,7 +80,7 @@ class TestFlashcardCreator:
     )
     @unittest.skip("Skipping test_create_flashcards")
     async def test_create_flashcards(self, test_input, expected, mock_repository, mock_chatbot):
-        from src.domain.flashcard.flashcard import FlashcardCreator
+        from src.domain.flashcard.service import FlashcardCreator
 
         creator = FlashcardCreator(mock_repository)
         await creator.create_flashcards(test_input, mock_chatbot)
@@ -84,7 +88,7 @@ class TestFlashcardCreator:
 
     @unittest.skip("Skipping test_create_flashcards_with_existing_cards")
     async def test_create_flashcards_with_existing_cards(self, mock_repository, mock_chatbot):
-        from src.domain.flashcard.flashcard import FlashcardCreator
+        from src.domain.flashcard.service import FlashcardCreator
 
         mock_repository.get_existing_flashcards.return_value = {"test1"}
         creator = FlashcardCreator(mock_repository)
@@ -98,7 +102,7 @@ class TestFlashcardCreator:
         assert mock_repository.save_flashcard.call_count == 1
 
     async def test_error_handling(self, mock_repository, mock_chatbot):
-        from src.domain.flashcard.flashcard import FlashcardCreator
+        from src.domain.flashcard.service import FlashcardCreator
 
         creator = FlashcardCreator(mock_repository)
         mock_chatbot.get_summary.side_effect = Exception("API Error")
@@ -110,7 +114,7 @@ class TestFlashcardCreator:
 class TestFlashcardService(unittest.TestCase):
 
     async def test_service_initialization(self, mock_notion_content, mock_chatbot, mock_repository):
-        from src.domain.flashcard.flashcard import FlashcardCreator, FlashcardService
+        from src.domain.flashcard.service import FlashcardCreator, FlashcardService
 
         creator = FlashcardCreator(mock_repository)
         service = FlashcardService(notion_content=mock_notion_content, chatbot=mock_chatbot, flashcard_creator=creator)
@@ -122,7 +126,7 @@ class TestFlashcardService(unittest.TestCase):
         with patch('src.flashcard.notion_content') as mock_notion_content:
             with patch('src.flashcard.chatbot') as mock_chatbot:
                 with patch('src.flashcard.repository') as mock_repository:
-                    from src.domain.flashcard.flashcard import FlashcardCreator, FlashcardService
+                    from src.domain.flashcard.service import FlashcardCreator, FlashcardService
 
                     creator = FlashcardCreator(mock_repository)
                     service = FlashcardService(

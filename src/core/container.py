@@ -8,7 +8,7 @@ from redis.asyncio.cluster import ClusterNode
 
 from src.common.websocket import WebSocketManager
 from src.core.config import settings
-from src.domain.task.task_service import TaskService
+from src.domain.task.service import TaskService
 
 logger = logging.getLogger(__name__)
 

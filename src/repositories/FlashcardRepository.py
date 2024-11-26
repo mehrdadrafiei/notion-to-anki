@@ -2,33 +2,14 @@ import csv
 import logging
 import os
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import Generic, List, Optional, TypeVar
+from typing import Generic, TypeVar
 
 import aiofiles
 
+from src.domain.flashcard.models import Flashcard
+
 # Generic type for repository
 T = TypeVar('T')
-
-
-@dataclass
-class Flashcard:
-    """Domain model representing a Flashcard."""
-
-    front: str
-    back: str
-    url: Optional[str] = None
-    tags: Optional[List[str]] = field(default_factory=list)
-    created_at: Optional[str] = None
-
-    def __post_init__(self):
-        """Validate flashcard data after initialization."""
-        if not self.front or not self.back:
-            raise ValueError("Flashcard must have both front and back content")
-
-        # Trim excessive whitespace
-        self.front = self.front.strip()
-        self.back = self.back.strip()
 
 
 class FlashcardRepositoryInterface(ABC, Generic[T]):
