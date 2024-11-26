@@ -1,6 +1,6 @@
-# AI Flashcard Generator
+# AI Notion2Anki
 
-A FastAPI-based web application that automatically generates flashcards from Notion pages with optional AI-powered summarization using Groq and Mistral AI.
+A FastAPI-based web application that automatically generates flashcards from Notion pages with optional AI-powered summarization using chatbots like Groq and Mistral AI.
 
 ## Features
 
