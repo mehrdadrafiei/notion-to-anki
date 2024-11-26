@@ -76,40 +76,6 @@ make test-cov  # Run tests with coverage
 make test-html  # Generate coverage HTML report
 ```
 
-## Project Structure
-
-```
-src/
-├── api/
-│   ├── middleware/
-│   │   └── rate_limiting.py
-│   └── routes/
-│       ├── flashcard_routes.py
-│       ├── health_routes.py
-│       └── websocket_routes.py
-├── core/
-│   ├── exceptions/
-│   │   ├── base.py
-│   │   └── domain.py
-│   ├── config.py
-│   ├── container.py
-│   └── error_handling.py
-├── domain/
-│   ├── chatbot/
-│   │   ├── providers/
-│   │   │   ├── groq.py
-│   │   │   └── mistral.py
-│   │   ├── base.py
-│   │   └── factory.py
-│   ├── flashcard/
-│   │   └── service.py
-│   └── notion/
-│       ├── models.py
-│       └── service.py
-└── common/
-    └── websocket.py
-```
-
 ## API Endpoints
 
 ### Flashcard Generation
