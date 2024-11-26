@@ -42,7 +42,7 @@ def create_app() -> FastAPI:
     app.add_middleware(RateLimitMiddleware, calls=settings.rate_limit_calls, period=settings.rate_limit_period)
 
     # Mount static files and templates
-    app.mount("/static", StaticFiles(directory="static"), name="static")
+    app.mount("/static", StaticFiles(directory="src/web/static"), name="static")
 
     # Include routers
     app.include_router(flashcard_routes.router, prefix="")
@@ -53,7 +53,7 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
-templates = Jinja2Templates(directory="templates")
+templates = Jinja2Templates(directory="src/web/templates")
 
 
 @app.get("/")

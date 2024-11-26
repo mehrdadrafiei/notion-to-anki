@@ -1,10 +1,10 @@
 import logging
-from typing import Optional
 
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, WebSocket, WebSocketException
 
-from ...common.websocket import WebSocketManager
-from ...core.container import get_websocket_manager
+from src.common.websocket import WebSocketManager
+from src.core.container import get_websocket_manager
+from src.core.exceptions.base import AppError
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -24,14 +24,31 @@ async def websocket_endpoint(
     """
     try:
         await websocket_manager.connect(task_id, websocket)
+
         while True:
             try:
                 await websocket.receive_text()
-            except WebSocketDisconnect:
-                logger.info(f"WebSocket disconnected for task {task_id}")
-                break
             except Exception as e:
-                logger.error(f"WebSocket error for task {task_id}: {str(e)}")
+                logger.warning(f"WebSocket connection closed for task {task_id}: {str(e)}")
                 break
+
+    except WebSocketException as e:
+        logger.error(f"WebSocket error for task {task_id}: {str(e)}")
+        if websocket.client_state.connected:
+            await websocket.close(code=1011, reason=str(e))
+
+    except AppError as e:
+        logger.error(
+            f"Application error in WebSocket for task {task_id}",
+            extra={"error_code": e.error_code, "details": e.details},
+        )
+        if websocket.client_state.connected:
+            await websocket.close(code=1011, reason=str(e))
+
+    except Exception as e:
+        logger.exception(f"Unexpected error in WebSocket for task {task_id}")
+        if websocket.client_state.connected:
+            await websocket.close(code=1011, reason="Internal server error")
+
     finally:
         websocket_manager.disconnect(task_id)

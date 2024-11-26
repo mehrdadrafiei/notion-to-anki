@@ -38,6 +38,24 @@ class Settings(BaseSettings):
         env_file_encoding = "utf-8"
 
 
+class RedisSettings(BaseSettings):
+    host: str = Field(..., env="REDIS_HOST")
+    port: int = Field(..., env="REDIS_PORT")
+    max_connections: int = Field(10, env="REDIS_MAX_CONNECTIONS")
+
+    @field_validator("max_connections")
+    def validate_max_connections(cls, v: int) -> int:
+        if v < 1 or v > 100:
+            raise ValueError("max_connections must be between 1 and 100")
+        return v
+
+
+class AppSettings(BaseSettings):
+    redis: RedisSettings
+    debug: bool = Field(False, env="DEBUG")
+    environment: str = Field("development", env="ENVIRONMENT")
+
+
 # Create a settings instance
 settings = Settings()
 

@@ -2,15 +2,23 @@ import asyncio
 import logging
 import time
 from functools import wraps
-from typing import Callable, Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 from cachetools import TTLCache
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 from src.core.config import settings
+from src.core.error_handling import handle_exceptions, handle_service_errors
+from src.core.exceptions.base import ValidationError
+from src.core.exceptions.domain import (
+    ChatBotError,
+    FlashcardCreationError,
+    FlashcardError,
+    FlashcardStorageError,
+    FlashcardValidationError,
+)
 from src.domain.task.service import TaskService
+from src.repositories.flashcard_repository import Flashcard, FlashcardRepositoryInterface
 
-from ...repositories.FlashcardRepository import Flashcard, FlashcardRepositoryInterface
 from ..chatbot.base import ChatBot
 
 
@@ -53,6 +61,7 @@ class FlashcardCache:
         """
         self.cache = TTLCache(maxsize=maxsize, ttl=ttl)
 
+    @handle_service_errors(default_return_value=None)
     def get(self, key: str) -> Optional[str]:
         """
         Retrieve value from cache.
@@ -65,7 +74,8 @@ class FlashcardCache:
         """
         return self.cache.get(key)
 
-    def set(self, key: str, value: str) -> None:
+    @handle_service_errors()
+    async def set(self, key: str, value: str) -> None:
         """
         Set value in cache.
 
@@ -131,14 +141,12 @@ class FlashcardCreator:
         """
         self.flashcard_repository = flashcard_repository
         self.cache = cache or FlashcardCache(maxsize=settings.cache_maxsize, ttl=settings.cache_expiry)
-        self.progress_callback: Optional[Callable] = None
         self.task_service = task_service
         self.logger = logging.getLogger(__name__)
         self.task_id = task_id
         self.user_id = user_id
 
-    @retry(stop=stop_after_attempt(settings.max_retries), wait=wait_exponential(multiplier=1, min=4, max=10))
-    @rate_limit(calls=settings.rate_limit_calls, period=settings.rate_limit_period)
+    @handle_service_errors(default_return_value=None)
     async def get_cached_summary(self, text: str, chatbot: Optional[ChatBot] = None) -> str:
         """
         Generate or retrieve a cached summary for given text.
@@ -150,33 +158,67 @@ class FlashcardCreator:
         Returns:
             str: Generated or cached summary
         """
+        if not chatbot:
+            return text
+
         prompt = f"{self.PROMPT_PREFIX} {text}"
         cache_key = f"summary_{hash(prompt)}"
 
         # Check cache first
-        cached_summary = self.cache.get(cache_key)
+        cached_summary = await self.cache.get(cache_key)
         if cached_summary:
             self.logger.info(f"Cache hit for prompt: {text[:50]}...")
             return cached_summary
 
-        # Generate summary if chatbot available
-        if not chatbot:
-            return text
-
         try:
             summary = await chatbot.get_summary(prompt)
-
             if summary:
-                self.cache.set(cache_key, summary)
+                await self.cache.set(cache_key, summary)
                 return summary
             return None
         except Exception as e:
-            self.logger.error(f"Error getting summary: {e}")
-            return None
+            raise ChatBotError(str(e), chatbot.__class__.__name__)
 
+    async def process_single_flashcard(
+        self, item: Dict[str, str], chatbot: Optional[ChatBot], existing_flashcards: set
+    ) -> Optional[Flashcard]:
+        """Process a single flashcard item."""
+        try:
+            card = Flashcard(front=item["front"], back=item["back"], url=item["url"])
+
+            # Skip existing flashcards
+            if card.front in existing_flashcards:
+                return None
+
+            # Validate content
+            FlashcardValidator.validate_flashcard_content(card.front)
+
+            if chatbot:
+                summary = await self.get_cached_summary(card.back, chatbot)
+                if not summary:
+                    raise FlashcardCreationError("Failed to generate summary")
+                card.back = summary
+
+            # Append URL to back content
+            card.back += f'\n URL: <a href="{item["url"]}">Link</a>'
+            return card
+
+        except (FlashcardValidationError, ChatBotError) as e:
+            self.logger.warning(f"Skipping flashcard: {str(e)}", extra=e.details)
+            return None
+        except Exception as e:
+            raise FlashcardCreationError(str(e))
+
+    @handle_exceptions(
+        {
+            FlashcardValidationError: (400, "Invalid flashcard content"),
+            FlashcardCreationError: (500, "Failed to create flashcard"),
+            FlashcardStorageError: (500, "Failed to store flashcard"),
+        }
+    )
     async def create_flashcards(
         self, notion_content: List[Dict[str, str]], chatbot: Optional[ChatBot] = None, batch_size: int = 10
-    ) -> Union[str, str]:
+    ) -> Tuple[str, str]:
         """
         Create flashcards from provided content.
 
@@ -185,94 +227,55 @@ class FlashcardCreator:
             chatbot (Optional[ChatBot], optional): Chatbot for summary generation
             batch_size (int, optional): Number of flashcards to process in batch
         """
-        self.logger.info(f"Starting flashcard creation for {len(notion_content)} items")
+        if not notion_content:
+            raise ValidationError("No content provided", "notion_content")
 
-        # Retrieve existing flashcards to avoid duplicates
-        existing_flashcards = await self.flashcard_repository.get_existing_flashcards()
         total_items = len(notion_content)
         processed_items = 0
         skipped_items = 0
 
-        for item in notion_content:
-            processed_items += 1
+        try:
+            # Retrieve existing flashcards
+            existing_flashcards = await self.flashcard_repository.get_existing_flashcards()
 
-            # Create flashcard
-            card = Flashcard(front=item["front"], back=item["back"], url=item["url"])
+            for item in notion_content:
+                processed_items += 1
 
-            # Skip existing flashcards
-            if card.front in existing_flashcards:
-                skipped_items += 1
-                if self.task_service:
-                    await self.task_service.update_task_progress(
-                        user_id=self.user_id,
-                        task_id=self.task_id,
-                        progress=int((processed_items / total_items) * 100),
-                        status="processing",
-                        message=f"Skipped existing flashcard ({processed_items}/{total_items})",
-                    )
-                self.logger.info(f"Skipping existing flashcard: {card.front[:50]}...")
-                await asyncio.sleep(0.1)
-                continue
+                try:
+                    card = await self.process_single_flashcard(item, chatbot, existing_flashcards)
 
-            # Validate content
-            if not FlashcardValidator.validate_flashcard_content(card.front):
-                skipped_items += 1
-                self.logger.warning(f"Invalid content skipped: {card.front[:50]}...")
-                continue
-
-            try:
-                if chatbot:
-                    # Try to get summary, skip if it fails
-                    summary = await self.get_cached_summary(card.back, chatbot)
-                    if summary is None:
+                    if not card:
                         skipped_items += 1
-                        if self.task_service:
-                            await self.task_service.update_task_progress(
-                                user_id=self.user_id,
-                                task_id=self.task_id,
-                                progress=int((processed_items / total_items) * 100),
-                                status="warning",
-                                message=f"Skipped flashcard due to summarization failure ({skipped_items} skipped)",
-                            )
-                        self.logger.warning(f"Skipping flashcard due to summarization failure: {card.front[:50]}...")
                         continue
 
-                    card.back = summary
+                    # Save flashcard
+                    await self.flashcard_repository.save_flashcard(card)
 
-                # Append URL to back content
-                card.back += f'\n URL: <a href="{item["url"]}">Link</a>'
+                    # Update progress
+                    if self.task_service:
+                        await self.task_service.update_task_progress(
+                            user_id=self.user_id,
+                            task_id=self.task_id,
+                            progress=int((processed_items / total_items) * 100),
+                            status="processing",
+                            message=f"Created flashcard ({processed_items}/{total_items})",
+                        )
 
-                # Save flashcard
-                await self.flashcard_repository.save_flashcard(card)
+                except Exception as e:
+                    skipped_items += 1
+                    self.logger.error(f"Error processing flashcard: {str(e)}")
+                    if self.task_service:
+                        await self.task_service.update_task_progress(
+                            user_id=self.user_id,
+                            task_id=self.task_id,
+                            progress=int((processed_items / total_items) * 100),
+                            status="warning",
+                            message=f"Error with flashcard ({processed_items}/{total_items}): {str(e)}",
+                        )
 
-                # Update progress after saving
-                if self.task_service:
-                    await self.task_service.update_task_progress(
-                        user_id=self.user_id,
-                        task_id=self.task_id,
-                        progress=int((processed_items / total_items) * 100),
-                        status="processing",
-                        message=f"Created flashcard ({processed_items}/{total_items})",
-                    )
+                await asyncio.sleep(0.1)  # Prevent overwhelming the system
 
-                self.logger.info(f"Created flashcard: {card.front[:50]}...")
-                await asyncio.sleep(0.1)
-
-            except Exception as e:
-                skipped_items += 1
-                self.logger.error(f"Error processing flashcard: {str(e)}")
-                if self.task_service:
-                    await self.task_service.update_task_progress(
-                        user_id=self.user_id,
-                        task_id=self.task_id,
-                        progress=int((processed_items / total_items) * 100),
-                        status="warning",
-                        message=f"Error with flashcard ({processed_items}/{total_items}): {str(e)}",
-                    )
-                await asyncio.sleep(0.1)
-
-        # Final progress update
-        if self.task_service:
+            # Determine final status
             if skipped_items == total_items:
                 message = "All flashcards failed to generate"
                 status = "failed"
@@ -283,16 +286,15 @@ class FlashcardCreator:
                 message = f"Flashcard generation completed successfully for all {total_items} flashcards"
                 status = "completed"
 
-            await self.task_service.update_task_progress(
-                user_id=self.user_id,
-                task_id=self.task_id,
-                progress=100,
-                status=status,
-                message=message,
-            )
-        self.logger.info(f"Flashcard creation completed in '{self.flashcard_repository.anki_output_file}'")
+            if self.task_service:
+                await self.task_service.update_task_progress(
+                    user_id=self.user_id, task_id=self.task_id, progress=100, status=status, message=message
+                )
 
-        return message, status
+            return message, status
+
+        except Exception as e:
+            raise FlashcardCreationError(str(e))
 
 
 class FlashcardService:
@@ -317,10 +319,13 @@ class FlashcardService:
         self.chatbot = chatbot
         self.logger = logging.getLogger(__name__)
 
-    async def run(self) -> Union[str, str]:
+    @handle_exceptions({FlashcardError: (500, "Flashcard generation failed"), ValidationError: (400, "Invalid input")})
+    async def run(self) -> Tuple[str, str]:
         """Execute flashcard creation process."""
+        if not self.notion_content:
+            raise ValidationError("No content provided", "notion_content")
+
         try:
             return await self.flashcard_creator.create_flashcards(self.notion_content, self.chatbot)
         except Exception as e:
-            self.logger.error(f"Error in flashcard creation: {e}")
-            raise
+            raise FlashcardError(str(e))

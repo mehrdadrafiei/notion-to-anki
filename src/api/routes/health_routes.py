@@ -1,11 +1,15 @@
 from fastapi import APIRouter, Request
 
-from monitoring.health import HealthCheck
+from src.core.error_handling import handle_exceptions
+from src.core.exceptions.base import ExternalServiceError
+
+from ..monitoring.health import HealthCheck
 
 router = APIRouter()
 
 
 @router.get("/health")
+@handle_exceptions({ExternalServiceError: (503, "Service health check failed")})
 async def health_check(request: Request):
     """
     Perform system health check.
