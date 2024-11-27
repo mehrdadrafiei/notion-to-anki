@@ -2,6 +2,8 @@
 
 A FastAPI-based web application that automatically generates flashcards from Notion pages with optional AI-powered summarization using chatbots like Groq and Mistral AI.
 
+* Demo: https://acute-ptarmigan-mehrdadr94-575a939c.koyeb.app
+
 ## Features
 
 - **Notion Integration**: Extract content directly from Notion pages
