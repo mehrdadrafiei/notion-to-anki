@@ -1,5 +1,5 @@
 import secrets
-from typing import List, Tuple
+from typing import List, Literal, Tuple
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     rate_limit_period: int = Field(60, description="Rate limit time period in seconds")
     cache_expiry: int = Field(3600, description="Cache expiry duration in seconds")
     cache_maxsize: int = Field(100, description="Cache maximum size")
-    environment: str = Field("development", description="Environment for task tracking")
+    environment: str = Field("production", description="Environment for task tracking")
     secret_key: str = Field(secrets.token_urlsafe(32), description="Secret key for session management")
     redis_cluster_nodes: List[Tuple[str, int]] = Field(
         [("localhost", 7001), ("localhost", 7002), ("localhost", 7003)], description="Redis cluster node IP addresses"
@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     redis_host: str = Field("localhost", description="Redis host")
     redis_port: int = Field(6379, description="Redis port")
     redis_max_connections: int = Field(10, description="Redis max connections")
-    storage_type: str = Field("memory", description="Storage backend type ('redis' or 'memory')")
+    storage_type: Literal["memory", "redis"] = Field("memory", description="Storage backend type")
 
     @field_validator('notion_api_key', 'groq_api_key', 'mistral_api_key')
     def validate_api_keys(cls, v: str) -> str:
