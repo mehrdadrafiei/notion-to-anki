@@ -14,5 +14,9 @@ COPY . .
 # Create output directory for flashcards
 RUN mkdir -p output
 
+ENV PORT=8000
+
 # Command to run the application
 CMD ["uvicorn", "src.api.main:app", "-ws", "wsproto", "--host", "0.0.0.0", "--port", "8000"]  
+
+CMD uvicorn src.api.main:app --reload --ws wsproto --host 0.0.0.0 --port $PORT

@@ -1,0 +1,14 @@
+app: notion2anki
+services:
+  - name: notion2anki-api
+    instance_type: free
+    ports:
+      - port: 8000
+        protocol: http
+    env:
+      - name: NOTION_API_KEY
+      - name: GROQ_API_KEY
+      - name: MISTRAL_API_KEY
+    routes:
+      - path: /
+        public: true
