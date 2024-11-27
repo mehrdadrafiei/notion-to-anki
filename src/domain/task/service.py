@@ -6,18 +6,18 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from fastapi import HTTPException
-from redis.asyncio import Redis
 
 from src.common.websocket import WebSocketManager
+from src.storage.base import StorageBackend
 
 logger = logging.getLogger(__name__)
 
 
 class TaskService:
-    def __init__(self, redis: Redis, websocket_manager: WebSocketManager):
-        self.redis = redis
+    def __init__(self, storage: StorageBackend, websocket_manager: WebSocketManager):
+        self.storage = storage
         self.websocket_manager = websocket_manager
-        self._lock = asyncio.Lock()  # Add lock for Redis operations
+        self._lock = asyncio.Lock()
 
     async def create_task(self, user_id: str, task_id: str, initial_data: Dict) -> None:
         """Create a new task with initial data."""
@@ -25,9 +25,8 @@ class TaskService:
         task_data = {**initial_data, "timestamp": datetime.now().isoformat(), "user_id": user_id}
 
         try:
-            async with self._lock:  # Use lock for Redis operations
-                # Store task data with 24-hour TTL
-                await self.redis.setex(task_key, 86400, json.dumps(task_data))  # 24 hours
+            async with self._lock:
+                await self.storage.set(task_key, task_data, expiry=86400)  # 24 hours
         except Exception as e:
             logger.error(f"Failed to create task {task_id}: {e}")
             raise HTTPException(status_code=500, detail="Failed to create task")
@@ -37,15 +36,10 @@ class TaskService:
         task_key = f"task:{user_id}:{task_id}"
 
         try:
-            async with self._lock:  # Use lock for Redis operations
-                # Get existing task data
-                existing_data = await self.redis.get(task_key)
-                if existing_data:
-                    task_data = json.loads(existing_data)
-                else:
-                    task_data = {}
+            async with self._lock:
+                existing_data = await self.storage.get(task_key)
+                task_data = existing_data or {}
 
-                # Update task data
                 task_data.update(
                     {
                         "progress": progress,
@@ -56,10 +50,8 @@ class TaskService:
                     }
                 )
 
-                # Store updated data
-                await self.redis.setex(task_key, 86400, json.dumps(task_data))  # 24 hours
+                await self.storage.set(task_key, task_data, expiry=86400)
 
-            # Send WebSocket update outside the lock
             try:
                 await self.websocket_manager.send_progress(task_id, task_data)
             except Exception as ws_error:
@@ -74,11 +66,10 @@ class TaskService:
         task_key = f"task:{user_id}:{task_id}"
 
         try:
-            task_data = await self.redis.get(task_key)
+            task_data = await self.storage.get(task_key)
             if not task_data:
                 raise HTTPException(status_code=404, detail="Task not found")
-
-            return json.loads(task_data)
+            return task_data
 
         except HTTPException:
             raise
@@ -93,18 +84,14 @@ class TaskService:
         try:
             # Add to sorted set with timestamp as score
             timestamp = datetime.fromisoformat(task_details['timestamp']).timestamp()
-
-            await self.redis.zadd(history_key, {json.dumps(task_details): timestamp})
-
+            await self.storage.zadd(history_key, {json.dumps(task_details): timestamp})
             # Trim history to last 100 entries
-            await self.redis.zremrangebyrank(history_key, 0, -101)
-
+            await self.storage.zremrangebyrank(history_key, 0, -101)  # Keep last 100 entries
             # Set 30-day TTL for history
-            await self.redis.expire(history_key, 2592000)
+            await self.storage.expire(history_key, 2592000)  # 30 days TTL
 
         except Exception as e:
             logger.error(f"Failed to add task to history for user {user_id}: {e}")
-            # Non-critical operation, log error but don't raise exception
 
     async def get_user_history(self, user_id: str, limit: int = 50) -> List[Dict]:
         """Get user's task history."""
@@ -112,8 +99,7 @@ class TaskService:
 
         try:
             # Get history entries sorted by timestamp
-            entries = await self.redis.zrevrange(history_key, 0, limit - 1)
-
+            entries = await self.storage.zrevrange(history_key, 0, limit - 1)
             return [json.loads(entry) for entry in entries]
 
         except Exception as e:

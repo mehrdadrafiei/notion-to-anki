@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     redis_host: str = Field("localhost", description="Redis host")
     redis_port: int = Field(6379, description="Redis port")
     redis_max_connections: int = Field(10, description="Redis max connections")
+    storage_type: str = Field("memory", description="Storage backend type ('redis' or 'memory')")
 
     @field_validator('notion_api_key', 'groq_api_key', 'mistral_api_key')
     def validate_api_keys(cls, v: str) -> str:
