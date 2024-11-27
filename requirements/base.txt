@@ -7,3 +7,4 @@ tenacity==9.0.0
 pydantic_settings==2.6.1
 wsproto==1.2.0
 redis==5.2.0
+itsdangerous==2.2.0 
