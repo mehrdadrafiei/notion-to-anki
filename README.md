@@ -39,7 +39,7 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 3. Install dependencies:
 ```bash
-pip install -r requirements.txt
+pip install -r requirements/base.txt -r requirements/api.txt
 ```
 
 4. Set up environment variables:
@@ -53,8 +53,6 @@ Required environment variables:
 NOTION_API_KEY=your_notion_api_key
 GROQ_API_KEY=your_groq_api_key
 MISTRAL_API_KEY=your_mistral_api_key
-REDIS_HOST=localhost
-REDIS_PORT=6379
 ```
 
 ## Development
@@ -66,7 +64,7 @@ docker-compose up -d redis
 
 2. Run the development server:
 ```bash
-python -m uvicorn src.api.main:app --reload --port 8000
+uvicorn src.api.main:app --reload --ws wsproto --host 0.0.0.0 --port 8000
 ```
 
 ## Testing
@@ -97,14 +95,14 @@ make test-html  # Generate coverage HTML report
 
 1. Set up Redis Cluster:
 ```bash
-docker-compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 2. Configure environment variables for production.
 
 3. Run with production server:
 ```bash
-gunicorn src.main:app -w 4 -k uvicorn.workers.UvicornWorker
+uvicorn src.api.main:app --ws wsproto --host 0.0.0.0 --port 8000
 ```
 
 ## Error Handling
@@ -133,7 +131,7 @@ The application implements a comprehensive error handling system:
 
 1. Install development dependencies:
 ```bash
-pip install -r requirements-dev.txt
+pip install -r requirements/dev.txt
 ```
 
 2. Install pre-commit hooks:
