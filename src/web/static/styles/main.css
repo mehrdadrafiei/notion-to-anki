@@ -13,9 +13,12 @@
     border: 2px solid #6B7280;
     border-radius: 0.25rem;
     margin-right: 0.5rem;
-    margin-left: 10px;
     flex-shrink: 0;
     transition: all 0.15s ease-in-out;
+}
+
+.space-y-4 .custom-checkbox input {
+    margin-left: 15px;
 }
 
 .custom-checkbox input:checked {
@@ -33,10 +36,13 @@
 }
 
 .custom-checkbox label {
-    font-size: 0.875rem;
     line-height: 1.5rem;
     color: #374151;
     margin-top: 2px;
+}
+
+.space-y-4 .custom-checkbox label {
+    font-size: 0.875rem;
 }
 
 .input-style {
@@ -122,4 +128,59 @@ button[type="submit"]:active {
 
 .download-btn:active {
     transform: scale(1);
+}
+
+.preview-item {
+    background-color: #fff;
+    border-radius: 4px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  
+.preview-item h2 {
+    font-size: 24px;
+    margin-bottom: 10px;
+}
+  
+.preview-item p {
+    margin-bottom: 10px;
+}
+
+.preview-item strong {
+    font-weight: bold;
+}
+ol {
+    list-style-type: decimal !important;
+}
+
+ul, ol {
+    padding-left: 1.5rem; /* Add space for nested lists */
+    margin-bottom: 1rem; /* Add spacing between lists */
+}
+li {
+    line-height: 1.6; /* Improve readability */
+}
+
+div#preview-cards pre {
+    font-family: 'Courier New', Courier, monospace;
+    background-color: #1b1b1b;
+    padding: 1.5em;
+    border: 1px solid #ddd;
+    overflow: auto;
+    color: #fff;
+    font-size: 0.9rem;
+    margin: 0.8em;
+}
+
+div#preview-cards code {
+    font-family: 'Courier New', Courier, monospace;
+}
+
+div#preview-section div#preview-cards ul {
+    list-style-type: disc;
+}
+
+div#preview-cards a {
+    color:#133D82;
 }

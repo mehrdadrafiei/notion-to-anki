@@ -89,9 +89,27 @@ async function loadPreview() {
         cards.forEach(card => {
             const cardElement = document.createElement('div');
             cardElement.className = 'border rounded-md p-4';
+            const frontHTML = marked.parse(card.front);
+
+
+            // Sanitize back content
+            let sanitizedBackHTML = card.back.replace(/\xa0/g, ' ');
+
+            // Ensure each list item starts on a new line
+            sanitizedBackHTML = sanitizedBackHTML.replace(/(\d+\.)\s*/g, '\n$1 ');
+
+            // Convert markdown to HTML using the marked function
+            const backHTML = marked.parse(sanitizedBackHTML);
+
             cardElement.innerHTML = `
-                <p class="font-semibold">Front: ${card.front}</p>
-                <p class="mt-2">Back: ${card.back}</p>
+                <div>
+                    <p class="font-semibold">Front:</p>
+                    <div class="mt-2">${frontHTML}</div>
+                </div>
+                <div class="mt-4">
+                    <p class="font-semibold">Back:</p>
+                    <div class="mt-2">${backHTML}</div>
+                </div>
             `;
             previewCards.appendChild(cardElement);
         });
@@ -101,6 +119,7 @@ async function loadPreview() {
         console.error('Error loading preview:', error);
     }
 }
+
 
 // Function to load history
 async function loadHistory() {
@@ -223,7 +242,7 @@ async function downloadFlashcards(taskId) {
         } else {
             console.error('Download failed:', await response.text());
         }
-        
+
     } catch (error) {
         console.error('Error downloading flashcards:', error);
     }

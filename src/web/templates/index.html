@@ -55,14 +55,20 @@
 
                     <!-- Content Inclusion Options -->
                     <div class="space-y-4">
-                        <label class="block font-medium text-gray-700">Include Content</label>
+                        <label class="block font-medium text-gray-700">Content for Back</label>
                         <div class="space-y-2">
                             <div class="custom-checkbox">
                                 <input id="includeUrls" type="checkbox" checked>
                                 <label for="includeUrls">Include URLs</label>
                             </div>
+                        </div>
+                    </div>
+
+                    <div class="space-y-4">
+                        <label class="block font-medium text-gray-700">Flashcard Front</label>
+                        <div class="space-y-2">
                             <div class="custom-checkbox">
-                                <input id="includeToggles" type="checkbox">
+                                <input id="includeToggles" type="checkbox" checked>
                                 <label for="includeToggles">Include Toggles</label>
                             </div>
                             <div class="custom-checkbox">
@@ -133,6 +139,7 @@
         </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="/static/js/flashcard_generator.js"></script>
 </body>
 </html>

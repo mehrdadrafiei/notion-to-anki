@@ -11,7 +11,7 @@ from src.core.error_handling import handle_exceptions, handle_service_errors
 from src.core.exceptions.base import ExternalServiceError, ResourceNotFoundError, ValidationError
 from src.core.exceptions.domain import NotionAuthenticationError, NotionContentError, NotionError
 
-from .models import NotionBlock, NotionPage
+from .models import BlockType, NotionBlock, NotionPage
 
 logger = logging.getLogger(__name__)
 
@@ -82,64 +82,6 @@ class NotionService:
         except APIResponseError as e:
             raise ExternalServiceError("Notion", "Failed to retrieve page URL", {"error": str(e)})
 
-    async def _process_block(self, block: Dict, base_url: str) -> Optional[NotionBlock]:
-        """
-        Process a single block, including nested content.
-
-        Args:
-            block (Dict): Notion block to process
-            base_url (str): Base URL of the page
-
-        Returns:
-            Optional[NotionBlock]: Processed block
-
-        Raises:
-            NotionContentError: If block processing fails
-        """
-        try:
-            nested_text = ""
-            if block.get('has_children', False):
-                nested_blocks = await self.client.blocks.children.list(block_id=block['id'])
-                nested_text = self._extract_nested_text(nested_blocks.get('results', []))
-
-            return NotionBlock.from_block_data(block, base_url=base_url, nested_text=nested_text)
-        except Exception as e:
-            logger.warning(f"Failed to process block: {str(e)}", extra={"block_id": block.get('id')})
-            return None
-
-    def _extract_nested_text(self, children: List[Dict]) -> str:
-        """
-        Extract text from child blocks.
-
-        Args:
-            children (List[Dict]): List of child blocks
-
-        Returns:
-            str: Concatenated text from child blocks
-        """
-        texts = []
-        supported_types = ['paragraph', 'bulleted_list_item', 'heading_1', 'heading_2', 'heading_3']
-
-        for child in children:
-            block_type = child['type']
-            if block_type in supported_types:
-                try:
-                    text = child[block_type]['rich_text'][0]['text']['content']
-                    texts.append(text)
-                except (KeyError, IndexError):
-                    continue
-
-        return "\n".join(texts)
-
-    @handle_exceptions(
-        {
-            ValidationError: (400, "Invalid page ID or URL"),
-            NotionAuthenticationError: (401, "Failed to authenticate with Notion"),
-            ResourceNotFoundError: (404, "Notion page not found"),
-            NotionError: (502, "Error processing Notion content"),
-            ExternalServiceError: (502, "Error communicating with Notion API"),
-        }
-    )
     async def get_page_content(self, page_id_or_url: str) -> NotionPage:
         """
         Retrieve and process all content from a Notion page.
@@ -160,23 +102,37 @@ class NotionService:
             raise ResourceNotFoundError("Notion page", page_id)
 
         try:
-            blocks_response = await self.client.blocks.children.list(block_id=page_id)
-            results = blocks_response.get('results', [])
+            # Get root blocks
+            response = await self.client.blocks.children.list(page_id)
+            root_blocks = response.get('results', [])
 
-            if not results:
+            if not root_blocks:
                 raise NotionContentError("Page has no content", page_id)
 
-            # Process blocks concurrently
-            tasks = [self._process_block(block, url) for block in results]
-            processed_blocks = await asyncio.gather(*tasks)
+            processed_blocks = []
 
-            # Filter out None values
-            valid_blocks = [block for block in processed_blocks if block is not None]
+            # Process each root block
+            for block in root_blocks:
+                if block.get('has_children'):
+                    # Get the text from the root block
+                    block_type = block['type']
+                    front_text = NotionBlock._extract_rich_text(block[block_type].get('rich_text', []))
 
-            if not valid_blocks:
+                    # Get all nested blocks
+                    nested_content = await self._get_nested_content(block['id'])
+
+                    if processed_block := NotionBlock(
+                        type=BlockType.PARAGRAPH,
+                        text=front_text,
+                        url=f"{url}#{block['id'].replace('-', '')}",
+                        nested_text=nested_content,
+                    ):
+                        processed_blocks.append(processed_block)
+
+            if not processed_blocks:
                 raise NotionContentError("No valid blocks found in page", page_id)
 
-            return NotionPage(id=page_id, url=url, blocks=valid_blocks)
+            return NotionPage(id=page_id, url=url, blocks=processed_blocks)
 
         except APIResponseError as e:
             if e.status == 401:
@@ -187,3 +143,50 @@ class NotionService:
                 raise ExternalServiceError("Notion", str(e), {"status": e.status})
         except Exception as e:
             raise NotionError(str(e), {"page_id": page_id})
+
+    async def _get_nested_content(self, block_id: str) -> str:
+        """
+        Get all nested content for a block and format it as markdown.
+        """
+        try:
+            response = await self.client.blocks.children.list(block_id)
+            blocks = response.get('results', [])
+
+            content_parts = []
+            numbered_list_count = 1
+
+            for block in blocks:
+                block_type = block['type']
+
+                # Extract text based on block type
+                if block_type == 'bulleted_list_item':
+                    text = NotionBlock._extract_rich_text(block['bulleted_list_item'].get('rich_text', []))
+                    content_parts.append(f"* {text}")
+
+                elif block_type == 'numbered_list_item':
+                    text = NotionBlock._extract_rich_text(block['numbered_list_item'].get('rich_text', []))
+                    content_parts.append(
+                        f"{numbered_list_count}. {text}"
+                    )  # Markdown will handle numbering automatically
+                    numbered_list_count += 1
+
+                elif block_type == 'paragraph':
+                    text = NotionBlock._extract_rich_text(block['paragraph'].get('rich_text', []))
+                    content_parts.append(text)
+
+                elif block_type == 'code':
+                    text = NotionBlock._extract_rich_text(block['code'].get('rich_text', []))
+                    language = block['code'].get('language', '')
+                    content_parts.append(f"```{language}\n{text}\n```")
+
+                # If this nested block has its own children, get them too
+                if block.get('has_children'):
+                    nested_text = await self._get_nested_content(block['id'])
+                    if nested_text:
+                        content_parts.append(nested_text)
+
+            return '\n'.join(content_parts)
+
+        except Exception as e:
+            logger.error(f"Error getting nested content for block {block_id}: {str(e)}")
+            return ""
