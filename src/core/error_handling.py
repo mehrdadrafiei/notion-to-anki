@@ -56,21 +56,18 @@ def handle_exceptions(
                         log_data = {
                             "function_name": func.__name__,
                             "function_module": func.__module__,
-                            "arguments": str(args),
-                            "keyword_arguments": str(kwargs),
                             "exception_type": type(e).__name__,
                         }
 
                         if isinstance(e, AppError):
-                            log_data.update(
-                                {
-                                    "error_code": e.error_code,
-                                    "error_details": e.details,
-                                }
-                            )
-                            error_response = {"message": message, "error_code": e.error_code, "details": e.details}
+                            # Use the exception's own message if it's our custom error
+                            error_response = {
+                                "message": str(e),  # Use exception's message
+                                "error_code": e.error_code,
+                                "details": e.details,
+                            }
                         else:
-                            error_response = {"message": message}
+                            error_response = {"message": message}  # Use mapping message
 
                         logger.log(log_level, str(e), extra=log_data)
                         raise HTTPException(status_code=status_code, detail=error_response)

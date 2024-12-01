@@ -1,13 +1,17 @@
 import asyncio
 import logging
-from typing import Optional
+from functools import lru_cache
+from typing import Dict, Optional
 
+from fastapi import HTTPException
 from redis.asyncio import Redis, RedisCluster
 from redis.asyncio.cluster import ClusterNode
 
 from src.common.websocket import WebSocketManager
 from src.core.config import settings
+from src.domain.flashcard.config import ExportFormat
 from src.domain.task.service import TaskService
+from src.repositories.flashcard_repository import FlashcardRepositoryFactory, FlashcardRepositoryInterface
 from src.storage.base import StorageBackend
 from src.storage.memory import DictionaryBackend
 from src.storage.redis import RedisBackend
@@ -113,6 +117,52 @@ async def get_task_service() -> TaskService:
     return await DependencyContainer.get_task_service()
 
 
+class RepositoryManager:
+    """Manages repository instances for different tasks."""
+
+    _repositories: Dict[str, FlashcardRepositoryInterface] = {}
+    _lock: asyncio.Lock = asyncio.Lock()
+
+    @classmethod
+    async def create_repository(
+        cls, task_id: str, export_format: ExportFormat, output_file: str
+    ) -> FlashcardRepositoryInterface:
+        """Create a new repository for a specific task."""
+        async with cls._lock:
+            # Clean up existing repository for this task if it exists
+            if task_id in cls._repositories:
+                await cls._repositories[task_id].cleanup()
+
+            # Create new repository
+            repository = FlashcardRepositoryFactory.create(
+                export_format=export_format, output_file=f"output/flashcards_{task_id}"
+            )
+            cls._repositories[task_id] = repository
+
+            return repository
+
+    @classmethod
+    def get_repository(cls, task_id: str) -> Optional[FlashcardRepositoryInterface]:
+        """Get repository for a specific task."""
+        return cls._repositories.get(task_id)
+
+    @classmethod
+    async def cleanup_repository(cls, task_id: str) -> None:
+        """Clean up repository for a specific task."""
+        async with cls._lock:
+            if task_id in cls._repositories:
+                await cls._repositories[task_id].cleanup()
+                del cls._repositories[task_id]
+
+    @classmethod
+    async def cleanup_all(cls) -> None:
+        """Clean up all repositories."""
+        async with cls._lock:
+            for repository in cls._repositories.values():
+                await repository.cleanup()
+            cls._repositories.clear()
+
+
 # Application lifecycle management
 async def init_dependencies():
     """Initialize application dependencies."""
@@ -130,6 +180,7 @@ async def cleanup_dependencies():
     """Cleanup application dependencies."""
     try:
         logger.info("Cleaning up application dependencies...")
+        await RepositoryManager.cleanup_all()
         await StorageConnection.close()
         logger.info("Dependencies cleaned up successfully")
     except Exception as e:

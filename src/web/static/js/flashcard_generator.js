@@ -197,13 +197,24 @@ async function downloadFlashcards(taskId) {
     try {
         const response = await fetch(`/download/${taskId}`);
         if (response.ok) {
+            // Get the filename from the Content-Disposition header
+            const contentDisposition = response.headers.get('Content-Disposition');
+            let filename = `flashcards_${taskId}.csv`; // Default fallback
+            
+            if (contentDisposition) {
+                const matches = /filename=(.+)$/.exec(contentDisposition);
+                if (matches && matches[1]) {
+                    filename = matches[1];
+                }
+            }
+
             // Create a blob from the response
             const blob = await response.blob();
             // Create a temporary link element
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `flashcards_${taskId}.csv`;
+            a.download = filename;
             document.body.appendChild(a);
             a.click();
             // Cleanup
@@ -212,7 +223,7 @@ async function downloadFlashcards(taskId) {
         } else {
             console.error('Download failed:', await response.text());
         }
-
+        
     } catch (error) {
         console.error('Error downloading flashcards:', error);
     }
@@ -222,9 +233,18 @@ async function downloadFlashcards(taskId) {
 document.getElementById('flashcardForm').addEventListener('submit', async (e) => {
     e.preventDefault();
 
-    const notionPage = document.getElementById('notionPage').value;
-    const useChatbot = document.getElementById('useChatbot').checked;
-    const chatbotType = useChatbot ? document.getElementById('chatbotType').value : null;
+    const formData = {
+        notion_page: document.getElementById('notionPage').value,
+        export_format: document.getElementById('exportFormat').value,
+        summary_length: document.getElementById('summaryLength').value,
+        use_chatbot: document.getElementById('useChatbot').checked,
+        chatbot_type: document.getElementById('useChatbot').checked ? document.getElementById('chatbotType').value : null,
+        include_urls: document.getElementById('includeUrls').checked,
+        include_toggles: document.getElementById('includeToggles').checked,
+        include_headings: document.getElementById('includeHeadings').checked,
+        include_bullets: document.getElementById('includeBullets').checked
+    };
+
     const statusDiv = document.getElementById('status');
     const resultDiv = document.getElementById('result');
     const progressSection = document.getElementById('progress-section');
@@ -234,10 +254,9 @@ document.getElementById('flashcardForm').addEventListener('submit', async (e) =>
     progressSection.classList.remove('hidden');
     document.getElementById('progress-bar').style.width = '0%';
     document.getElementById('progress-status').textContent = 'Starting generation...';
-    // Show loading status
     statusDiv.classList.add('hidden');
     resultDiv.classList.add('hidden');
-    downloadSection.classList.add('hidden'); // Hide download button when starting new generation
+    downloadSection.classList.add('hidden');
 
     try {
         const response = await fetch('/generate-flashcards/', {
@@ -245,11 +264,7 @@ document.getElementById('flashcardForm').addEventListener('submit', async (e) =>
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({
-                notion_page: notionPage,
-                use_chatbot: useChatbot,
-                chatbot_type: chatbotType
-            }),
+            body: JSON.stringify(formData),
         });
 
         const data = await response.json();
@@ -258,16 +273,11 @@ document.getElementById('flashcardForm').addEventListener('submit', async (e) =>
         if (response.ok) {
             currentTaskId = data.task_id;
             console.log("Task ID received:", currentTaskId);
-
-            // Connect to WebSocket for real-time updates
             socket = connectWebSocket(currentTaskId);
-
-            // Show loading status
             statusDiv.classList.remove('hidden');
             resultDiv.classList.add('hidden');
             downloadSection.classList.add('hidden');
         } else {
-            // Handle error responses from the server
             statusDiv.classList.add('hidden');
             resultDiv.classList.remove('hidden');
             if (response.status === 429) {

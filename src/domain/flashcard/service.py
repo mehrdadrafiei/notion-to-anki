@@ -16,6 +16,7 @@ from src.core.exceptions.domain import (
     FlashcardStorageError,
     FlashcardValidationError,
 )
+from src.domain.flashcard.config import FlashcardGenerationConfig
 from src.domain.task.service import TaskService
 from src.repositories.flashcard_repository import Flashcard, FlashcardRepositoryInterface
 
@@ -62,7 +63,7 @@ class FlashcardCache:
         self.cache = TTLCache(maxsize=maxsize, ttl=ttl)
 
     @handle_service_errors(default_return_value=None)
-    def get(self, key: str) -> Optional[str]:
+    async def get(self, key: str) -> Optional[str]:
         """
         Retrieve value from cache.
 
@@ -119,10 +120,7 @@ class FlashcardCreator:
     Manages the creation of flashcards from various content sources.
     """
 
-    PROMPT_PREFIX = (
-        "Summarize the following text for the back of an Anki flashcard. "
-        "Provide only the summary, enclosed in [[ ]]: \n"
-    )
+    PROMPT_PREFIX = "Summarize the following text. Provide only the summary, enclosed in [[ ]]"
 
     def __init__(
         self,
@@ -147,7 +145,9 @@ class FlashcardCreator:
         self.user_id = user_id
 
     @handle_service_errors(default_return_value=None)
-    async def get_cached_summary(self, text: str, chatbot: Optional[ChatBot] = None) -> str:
+    async def get_cached_summary(
+        self, text: str, config: FlashcardGenerationConfig, chatbot: Optional[ChatBot] = None
+    ) -> str:
         """
         Generate or retrieve a cached summary for given text.
 
@@ -161,7 +161,7 @@ class FlashcardCreator:
         if not chatbot:
             return text
 
-        prompt = f"{self.PROMPT_PREFIX} {text}"
+        prompt = f"{self.PROMPT_PREFIX}. {config.get_summary_prompt(text)}"
         cache_key = f"summary_{hash(prompt)}"
 
         # Check cache first
@@ -180,21 +180,17 @@ class FlashcardCreator:
             raise ChatBotError(str(e), chatbot.__class__.__name__)
 
     async def process_single_flashcard(
-        self, item: Dict[str, str], chatbot: Optional[ChatBot], existing_flashcards: set
+        self, item: Dict[str, str], config: FlashcardGenerationConfig, chatbot: Optional[ChatBot]
     ) -> Optional[Flashcard]:
         """Process a single flashcard item."""
         try:
             card = Flashcard(front=item["front"], back=item["back"], url=item["url"])
 
-            # Skip existing flashcards
-            if card.front in existing_flashcards:
-                return None
-
             # Validate content
             FlashcardValidator.validate_flashcard_content(card.front)
 
             if chatbot:
-                summary = await self.get_cached_summary(card.back, chatbot)
+                summary = await self.get_cached_summary(card.back, config, chatbot)
                 if not summary:
                     raise FlashcardCreationError("Failed to generate summary")
                 card.back = summary
@@ -217,7 +213,11 @@ class FlashcardCreator:
         }
     )
     async def create_flashcards(
-        self, notion_content: List[Dict[str, str]], chatbot: Optional[ChatBot] = None, batch_size: int = 10
+        self,
+        notion_content: List[Dict[str, str]],
+        config: FlashcardGenerationConfig = None,
+        chatbot: Optional[ChatBot] = None,
+        batch_size: int = 10,
     ) -> Tuple[str, str]:
         """
         Create flashcards from provided content.
@@ -235,14 +235,11 @@ class FlashcardCreator:
         skipped_items = 0
 
         try:
-            # Retrieve existing flashcards
-            existing_flashcards = await self.flashcard_repository.get_existing_flashcards()
-
             for item in notion_content:
                 processed_items += 1
 
                 try:
-                    card = await self.process_single_flashcard(item, chatbot, existing_flashcards)
+                    card = await self.process_single_flashcard(item, config, chatbot)
 
                     if not card:
                         skipped_items += 1
@@ -304,6 +301,7 @@ class FlashcardService:
         self,
         flashcard_creator: FlashcardCreator,
         notion_content: List[Dict[str, str]],
+        config: FlashcardGenerationConfig,
         chatbot: Optional[ChatBot] = None,
     ):
         """
@@ -316,6 +314,7 @@ class FlashcardService:
         """
         self.flashcard_creator = flashcard_creator
         self.notion_content = notion_content
+        self.config = config
         self.chatbot = chatbot
         self.logger = logging.getLogger(__name__)
 
@@ -326,6 +325,6 @@ class FlashcardService:
             raise ValidationError("No content provided", "notion_content")
 
         try:
-            return await self.flashcard_creator.create_flashcards(self.notion_content, self.chatbot)
+            return await self.flashcard_creator.create_flashcards(self.notion_content, self.config, self.chatbot)
         except Exception as e:
             raise FlashcardError(str(e))

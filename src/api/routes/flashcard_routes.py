@@ -1,78 +1,26 @@
-import csv
 import logging
 import os
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Dict, List
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Response
-from pydantic import BaseModel, Field, field_validator
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 
+from src.api.models.models import FlashcardRequest, FlashcardResponse
 from src.core.auth import get_current_user
-from src.core.container import get_task_service
+from src.core.container import RepositoryManager, get_task_service
 from src.core.error_handling import handle_exceptions
 from src.core.exceptions.base import ResourceNotFoundError, ValidationError
-from src.core.exceptions.domain import ChatBotError, FlashcardCreationError, FlashcardError, NotionError, TaskError
+from src.core.exceptions.domain import ChatBotError, FlashcardError, NotionError, TaskError
 from src.domain.chatbot.factory import ChatBotFactory
+from src.domain.flashcard.config import FlashcardGenerationConfig
 from src.domain.flashcard.service import FlashcardCreator, FlashcardService
 from src.domain.notion.factory import create_notion_service
 from src.domain.task.service import TaskService
-from src.repositories.flashcard_repository import CSVFlashcardRepository
 
-# Configure logging
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-
-class FlashcardRequest(BaseModel):
-    """Request schema for generating flashcards"""
-
-    notion_page: str = Field(..., description="Notion page ID or URL")
-    output_path: str = Field("output/flashcards.csv", description="Path to save the flashcards")
-    batch_size: int = Field(10, gt=0, le=100)
-    use_chatbot: bool = Field(False)
-    chatbot_type: Optional[str] = Field(None)
-
-    @field_validator("chatbot_type")
-    def validate_chatbot_type(cls, value, values):
-        """
-        Validate chatbot type when using a chatbot.
-
-        Args:
-            value (str): Chatbot type
-            values (Dict): Other request values
-
-        Returns:
-            str: Validated chatbot type
-
-        Raises:
-            ValueError: If chatbot type is invalid
-        """
-        if values.data.get('use_chatbot'):
-            if not value:
-                raise ValueError("Chatbot type is required when use_chatbot is True")
-            available_chatbots = ChatBotFactory.get_available_chatbots()
-            if value not in available_chatbots:
-                raise ValueError(f"Invalid chatbot type. Allowed types: {available_chatbots}")
-        return value
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "notion_page": "page_id_or_url",
-                "output_path": "output/flashcards.csv",
-                "batch_size": 10,
-                "use_chatbot": True,
-                "chatbot_type": "groq",
-            }
-        }
-
-
-class FlashcardResponse(BaseModel):
-    """Response schema for generating flashcards"""
-
-    message: str
-    task_id: str
 
 
 @handle_exceptions(
@@ -84,13 +32,17 @@ class FlashcardResponse(BaseModel):
         TaskError: (500, "Task management error"),
     }
 )
-async def generate_flashcards_task(task_service: TaskService, user_id: str, task_id: str, request: FlashcardRequest):
+async def generate_flashcards_task(
+    request: FlashcardRequest, task_id: str, user_id: str, task_service: TaskService
+) -> None:
     """
     Background task for generating flashcards.
 
     Args:
-        task_id (str): Unique identifier for the task
-        request (FlashcardRequest): Flashcard generation request details
+        request (FlashcardRequest): Flashcard generation request
+        task_id (str): Unique task identifier
+        user_id (str): Current user ID
+        task_service (TaskService): Task service instance
     """
     try:
         # Initialize task
@@ -98,225 +50,305 @@ async def generate_flashcards_task(task_service: TaskService, user_id: str, task
             user_id=user_id, task_id=task_id, progress=0, status="starting", message="Initializing components..."
         )
 
-        # Initialize components
-        flashcard_repository = CSVFlashcardRepository(anki_output_file=request.output_path)
         notion_service = await create_notion_service()
 
-        # Fetch Notion content
-        await task_service.update_task_progress(
-            user_id=user_id, task_id=task_id, progress=10, status="processing", message="Fetching Notion content..."
+        chatbot = (
+            await ChatBotFactory.create(request.chatbot_type) if request.use_chatbot and request.chatbot_type else None
         )
 
-        notion_page = await notion_service.get_page_content(request.notion_page)
-        notion_content = notion_page.to_flashcard_format
-
-        # Create flashcards
-        await task_service.update_task_progress(
-            user_id=user_id, task_id=task_id, progress=20, status="processing", message="Creating flashcards..."
+        # Configure repository with new instance for this task
+        # Create and configure task-specific repository
+        repository = await RepositoryManager.create_repository(
+            task_id=task_id, export_format=request.export_format, output_file=f"output/flashcards_{task_id}"
+        )
+        # Create flashcard creator
+        creator = FlashcardCreator(
+            flashcard_repository=repository,
+            task_service=task_service,
+            task_id=task_id,
+            user_id=user_id,
         )
 
-        flashcard_creator = FlashcardCreator(
-            flashcard_repository=flashcard_repository, task_service=task_service, task_id=task_id, user_id=user_id
-        )
-
-        async def run_service(chatbot=None):
-            """
-            Run flashcard service with optional chatbot.
-
-            Args:
-                chatbot (Optional[ChatBot]): Chatbot for summary generation
-            """
-            service = FlashcardService(
-                flashcard_creator=flashcard_creator, notion_content=notion_content, chatbot=chatbot
+        try:
+            # Update task status
+            await task_service.update_task_progress(
+                user_id=user_id, task_id=task_id, progress=20, status="processing", message="Creating flashcards..."
             )
-            return await service.run()
 
-        if request.use_chatbot:
-            chatbot = await ChatBotFactory.create(request.chatbot_type)
-            async with chatbot:
-                result_message, result_status = await run_service(chatbot)
-        else:
-            result_message, result_status = await run_service()
+            # Get Notion content
+            notion_page = await notion_service.get_page_content(request.notion_page)
 
-        # Add to history
-        await task_service.add_to_history(
-            user_id,
-            {
-                "task_id": task_id,
-                "notion_page": notion_page.url,
-                "chatbot_type": request.chatbot_type,
-                "output_path": request.output_path,
-                "timestamp": datetime.now().isoformat(),
-                "status": result_status,
-            },
-        )
+            # Create configuration
+            config = FlashcardGenerationConfig(
+                export_format=request.export_format,
+                use_ai_summary=request.use_chatbot,
+                summary_length=request.summary_length,
+                max_cards_per_page=request.max_cards,
+                include_urls=request.include_urls,
+                include_checklists=request.include_checklists,
+                include_headings=request.include_headings,
+                include_bullets=request.include_bullets,
+            )
 
-    except Exception as e:
-        logger.exception(f"Task {task_id} failed")
+            # Create and run service
+            service = FlashcardService(
+                flashcard_creator=creator,
+                notion_content=notion_page.to_flashcard_format,
+                config=config,
+                chatbot=chatbot,
+            )
+
+            message, status = await service.run()
+
+            # Add to history
+            await task_service.add_to_history(
+                user_id,
+                {
+                    "task_id": task_id,
+                    "notion_page": request.notion_page,
+                    "status": status,
+                    "message": message,
+                    "timestamp": datetime.now().isoformat(),
+                },
+            )
+
+        finally:
+            # Cleanup resources
+            if chatbot:
+                await chatbot.cleanup()
+
+    except NotionError as e:
+        logger.error(f"Notion error: {str(e)}")
         await task_service.update_task_progress(
-            user_id=user_id, task_id=task_id, progress=100, status="failed", message=str(e)
+            user_id=user_id,
+            task_id=task_id,
+            progress=100,
+            status="failed",
+            message=f"Notion error: {str(e)}",
         )
-        raise
+    except Exception as e:
+        logger.error(f"Error generating flashcards: {str(e)}")
+        await task_service.update_task_progress(
+            user_id=user_id,
+            task_id=task_id,
+            progress=100,
+            status="failed",
+            message=f"Error: {str(e)}",
+        )
+        await RepositoryManager.cleanup_repository(task_id)  # Cleanup repository on error
 
 
 @router.post("/generate-flashcards/", response_model=FlashcardResponse)
 @handle_exceptions({ValidationError: (400, "Invalid request"), TaskError: (500, "Failed to create task")})
-async def create_flashcards(
+async def generate_flashcards(
     request: FlashcardRequest,
     background_tasks: BackgroundTasks,
-    current_user: str = Depends(get_current_user),
     task_service: TaskService = Depends(get_task_service),
-):
+    user_id: str = Depends(get_current_user),
+) -> FlashcardResponse:
     """
-    Endpoint to initiate flashcard generation.
+    Generate flashcards from a Notion page.
 
     Args:
-        request (FlashcardRequest): Flashcard generation request details
-        background_tasks (BackgroundTasks): FastAPI background tasks manager
-        current_user (str): user id
-        task_service (TaskService): task_service
+        request (FlashcardRequest): Flashcard generation request
+        background_tasks (BackgroundTasks): FastAPI background tasks
+        task_service (TaskService): Task service instance
+        user_id (str): Current user ID
 
     Returns:
-        FlashcardResponse: Task initiation response
+        FlashcardResponse: Response containing task ID
+
+    Raises:
+        HTTPException: If request validation or processing fails
     """
-    # Generate unique task ID and output path
-    task_id = f"task_{uuid.uuid4()}"
-    output_path = f"output/flashcards_{task_id}.csv"
-    request.output_path = output_path
+    try:
+        # Generate unique task ID
+        task_id = str(uuid.uuid4())
 
-    # Ensure output directory exists
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        # Create initial task record
+        await task_service.create_task(
+            user_id=user_id,
+            task_id=task_id,
+            initial_data={
+                "status": "initiated",
+                "message": "Starting flashcard generation",
+                "progress": 0,
+                "notion_page": request.notion_page,
+                "use_chatbot": request.use_chatbot,
+                "chatbot_type": request.chatbot_type if request.use_chatbot else None,
+            },
+        )
 
-    # Create task with initial status
-    await task_service.create_task(
-        user_id=current_user,
-        task_id=task_id,
-        initial_data={"status": "created", "output_path": output_path, "request": request.model_dump()},
-    )
+        # Add task to background tasks
+        background_tasks.add_task(
+            generate_flashcards_task,
+            request=request,
+            task_id=task_id,
+            user_id=user_id,
+            task_service=task_service,
+        )
 
-    # Add generation task to background tasks
-    background_tasks.add_task(
-        generate_flashcards_task, task_service=task_service, user_id=current_user, task_id=task_id, request=request
-    )
+        return FlashcardResponse(message="Flashcard generation started", task_id=task_id)
 
-    return FlashcardResponse(message="Flashcard generation started", task_id=task_id)
+    except Exception as e:
+        logger.error(f"Failed to initiate flashcard generation: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to start flashcard generation")
 
 
 @router.get("/task-status/{task_id}")
-@handle_exceptions({ResourceNotFoundError: (404, "Task not found"), TaskError: (500, "Failed to get task status")})
+@handle_exceptions(
+    {
+        ResourceNotFoundError: (404, "Resource not found"),  # Generic mapping for all ResourceNotFoundError
+        TaskError: (500, "Failed to get task status"),
+    }
+)
 async def get_task_status(
-    task_id: str, current_user: str = Depends(get_current_user), task_service: TaskService = Depends(get_task_service)
+    task_id: str, user_id: str = Depends(get_current_user), task_service: TaskService = Depends(get_task_service)
 ):
     """
-    Retrieve status of a specific task.
+    Get status of a flashcard generation task.
 
     Args:
-        task_id (str): Unique identifier for the task
-        task_service (TaskService): task_service
+        task_id (str): Task identifier
+        task_service (TaskService): Task service instance
+        user_id (str): Current user ID
 
     Returns:
-        Dict: Task status information
-
+        dict: Task status information
     Raises:
         HTTPException: If task is not found
     """
-    return await task_service.get_task_status(current_user, task_id)
+    try:
+        task_data = await task_service.get_task_status(user_id, task_id)
+        if not task_data:
+            raise ResourceNotFoundError("Task", task_id)
+        return task_data
+    except Exception as e:
+        logger.error(f"Error getting task status: {str(e)}")
+        raise
 
 
 @router.get("/generation-history")
 @handle_exceptions({TaskError: (500, "Failed to retrieve generation history")})
 async def get_generation_history(
-    current_user: str = Depends(get_current_user),
+    user_id: str = Depends(get_current_user),
     limit: int = 50,
     task_service: TaskService = Depends(get_task_service),
 ):
     """
-    Retrieve generation history.
+    Get flashcard generation history.
+
+    Args:
+        task_service (TaskService): Task service instance
+        user_id (str): Current user ID
+        limit (int): Maximum number of history items
 
     Returns:
-        List[Dict]: List of past generation tasks
+        List[dict]: Generation history
     """
-    return await task_service.get_user_history(current_user, limit)
+    try:
+        return await task_service.get_user_history(user_id, limit)
+    except Exception as e:
+        logger.error(f"Error getting generation history: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve generation history")
 
 
 @router.get("/preview-flashcards/{task_id}")
 @handle_exceptions(
     {
-        ResourceNotFoundError: (404, "Flashcards not found or still processing"),
+        ResourceNotFoundError: (404, "Resource not found"),  # Generic mapping
         FlashcardError: (500, "Failed to preview flashcards"),
     }
 )
 async def preview_flashcards(
-    task_id: str, current_user: str = Depends(get_current_user), task_service: TaskService = Depends(get_task_service)
-):
+    task_id: str,
+    limit: int = Query(default=5, ge=1, le=20),
+    task_service: TaskService = Depends(get_task_service),
+    user_id: str = Depends(get_current_user),
+) -> List[Dict[str, str]]:
     """
-    Preview first 5 generated flashcards.
+    Preview generated flashcards.
 
     Args:
-        task_id (str): Unique identifier for the task
-        task_service (TaskService): task_service
-
+        task_id (str): Task identifier
+        limit (int): Maximum number of cards to preview
+        task_service (TaskService): Task service instance
+        user_id (str): Current user ID
+        repository (FlashcardRepositoryInterface): Flashcard repository instance
     Returns:
-        List[Dict]: Preview of generated flashcards
-
+        List[Flashcard]: List of preview flashcards
     Raises:
         HTTPException: If flashcards are not found or still processing
     """
-    task = await task_service.get_task_status(current_user, task_id)
-    if not task or task["status"] not in ["completed", "completed_with_errors"]:
-        raise ResourceNotFoundError("Flashcards", task_id)
-
-    output_path = f"output/flashcards_{task_id}.csv"
-    preview_cards = []
     try:
-        with open(output_path, 'r', encoding='utf-8') as f:
-            reader = csv.reader(f)
-            for i, row in enumerate(reader):
-                if i >= 5:  # Preview only first 5 cards
-                    break
-                preview_cards.append({"front": row[0], "back": row[1]})
-    except Exception as e:
-        raise FlashcardError(f"Failed to read flashcard file: {str(e)}")
+        task_status = await task_service.get_task_status(user_id, task_id)
+        if not task_status:
+            raise ResourceNotFoundError("Task", task_id)
 
-    return preview_cards
+        if task_status["status"] not in ["completed", "completed_with_errors"]:
+            raise ResourceNotFoundError("Flashcards", task_id, details={"status": task_status["status"]})
+
+        repository = RepositoryManager.get_repository(task_id)
+        if not repository or not os.path.exists(repository.output_file):
+            raise ResourceNotFoundError("FlashcardRepository", task_id)
+
+        return await repository.get_flashcards(limit=limit)
+
+    except ResourceNotFoundError:
+        raise
+    except Exception as e:
+        logger.error(f"Error previewing flashcards: {str(e)}")
+        raise FlashcardError(f"Failed to preview flashcards: {str(e)}")
 
 
 @router.get("/download/{task_id}")
 @handle_exceptions(
     {
-        ResourceNotFoundError: (404, "Flashcards not found or still processing"),
+        ResourceNotFoundError: (404, "Resource not found"),  # Generic mapping
         FlashcardError: (500, "Failed to download flashcards"),
     }
 )
 async def download_flashcards(
-    task_id: str, current_user: str = Depends(get_current_user), task_service: TaskService = Depends(get_task_service)
+    task_id: str, user_id: str = Depends(get_current_user), task_service: TaskService = Depends(get_task_service)
 ):
     """
-    Download generated flashcards CSV file.
+    Download generated flashcards.
 
     Args:
-        task_id (str): Unique identifier for the task
-        task_service (TaskService) : task_service
-
+        task_id (str): Task identifier
+        user_id (str): Current user ID
+        task_service (TaskService): Task service instance
+        repository (FlashcardRepositoryInterface): Flashcard repository instance
     Returns:
-        Response: CSV file download
-
+        FileResponse: Generated flashcard file
     Raises:
         HTTPException: If flashcards are not found or an error occurs
     """
-    task = await task_service.get_task_status(current_user, task_id)
-    if not task or task["status"] not in ["completed", "completed_with_errors"]:
-        raise ResourceNotFoundError("Flashcards", task_id)
-
-    output_path = f"output/flashcards_{task_id}.csv"
     try:
-        with open(output_path, 'rb') as f:
-            content = f.read()
-    except Exception as e:
-        raise FlashcardError(f"Failed to read flashcard file: {str(e)}")
+        task_status = await task_service.get_task_status(user_id, task_id)
+        if not task_status:
+            raise ResourceNotFoundError("Task", task_id)
 
-    return Response(
-        content=content,
-        media_type='text/csv',
-        headers={'Content-Disposition': f'attachment; filename="flashcards_{task_id}.csv"'},
-    )
+        if task_status["status"] not in ["completed", "completed_with_errors"]:
+            raise ResourceNotFoundError("Flashcards", task_id, details={"status": task_status["status"]})
+
+        repository = RepositoryManager.get_repository(task_id)
+        if not repository or not os.path.exists(repository.output_file):
+            raise ResourceNotFoundError("FlashcardRepository", task_id)
+
+        # Determine the correct file extension and media type
+        file_extension = os.path.splitext(repository.output_file)[1].lower()
+        media_type = "application/apkg" if file_extension == ".apkg" else "text/csv"
+
+        return FileResponse(
+            repository.output_file,
+            media_type=media_type,
+            filename=os.path.basename(repository.output_file),
+            headers={"Content-Disposition": f"attachment; filename={os.path.basename(repository.output_file)}"},
+        )
+
+    except ResourceNotFoundError:
+        raise
+    except Exception as e:
+        logger.error(f"Error downloading flashcards: {str(e)}")
+        raise FlashcardError(f"Failed to download flashcards: {str(e)}")

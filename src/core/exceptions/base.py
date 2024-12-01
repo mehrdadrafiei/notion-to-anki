@@ -14,18 +14,18 @@ class AppError(Exception):
 class ValidationError(AppError):
     """Validation error"""
 
-    def __init__(self, message: str, field: str):
-        super().__init__(message=message, error_code="VALIDATION_ERROR", details={"field": field})
+    def __init__(self, message: str, field: str, details: Optional[Dict] = None):
+        super().__init__(message=message, error_code="VALIDATION_ERROR", details={"field": field, **(details or {})})
 
 
 class ResourceNotFoundError(AppError):
     """Resource not found error"""
 
-    def __init__(self, resource_type: str, resource_id: str):
+    def __init__(self, resource_type: str, resource_id: str, details: Optional[Dict] = None):
         super().__init__(
             message=f"{resource_type} not found: {resource_id}",
             error_code="RESOURCE_NOT_FOUND",
-            details={"resource_type": resource_type, "resource_id": resource_id},
+            details={"resource_type": resource_type, "resource_id": resource_id, **(details or {})},
         )
 
 
