@@ -1,3 +1,11 @@
+fastapi>=0.115.5
+uvicorn[standard]>=0.32.1
+starlette>=0.41.3
+python-multipart>=0.0.6
+jinja2>=3.1.2
+aiofiles==23.2.1
+aiohttp==3.11.9
+genanki==0.13.1
 notion-client==2.2.1
 mistralai[async]==1.2.3
 groq==0.12.0
@@ -7,4 +15,4 @@ tenacity==9.0.0
 pydantic_settings==2.6.1
 wsproto==1.2.0
 redis==5.2.0
-itsdangerous==2.2.0 
+itsdangerous==2.2.0
