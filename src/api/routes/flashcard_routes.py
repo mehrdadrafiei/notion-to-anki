@@ -75,9 +75,6 @@ async def generate_flashcards_task(
                 user_id=user_id, task_id=task_id, progress=20, status="processing", message="Creating flashcards..."
             )
 
-            # Get Notion content
-            notion_page = await notion_service.get_page_content(request.notion_page)
-
             # Create configuration
             config = FlashcardGenerationConfig(
                 export_format=request.export_format,
@@ -86,9 +83,13 @@ async def generate_flashcards_task(
                 max_cards_per_page=request.max_cards,
                 include_urls=request.include_urls,
                 include_checklists=request.include_checklists,
+                include_toggles=request.include_toggles,
                 include_headings=request.include_headings,
                 include_bullets=request.include_bullets,
             )
+
+            # Get Notion content
+            notion_page = await notion_service.get_page_content(request.notion_page, config)
 
             # Create and run service
             service = FlashcardService(

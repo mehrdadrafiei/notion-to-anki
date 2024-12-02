@@ -260,7 +260,6 @@ document.getElementById('flashcardForm').addEventListener('submit', async (e) =>
         chatbot_type: document.getElementById('useChatbot').checked ? document.getElementById('chatbotType').value : null,
         include_urls: document.getElementById('includeUrls').checked,
         include_toggles: document.getElementById('includeToggles').checked,
-        include_headings: document.getElementById('includeHeadings').checked,
         include_bullets: document.getElementById('includeBullets').checked
     };
 
@@ -340,3 +339,33 @@ document.getElementById('download-btn').addEventListener('click', () => {
         downloadFlashcards(currentTaskId);
     }
 });
+
+
+const contentOptions = document.querySelectorAll('.content-option');
+const selectionMessage = document.getElementById('selection-message');
+const generateButton = document.getElementById('generateButton');
+
+// Function to check if at least one checkbox is checked
+function checkContentOptions() {
+    let isChecked = false;
+    contentOptions.forEach(function(checkbox) {
+        if (checkbox.checked) {
+            isChecked = true;
+        }
+    });
+    if (!isChecked) {
+        selectionMessage.classList.remove('hidden');
+        generateButton.disabled = true; // Disable the button
+    } else {
+        selectionMessage.classList.add('hidden');
+        generateButton.disabled = false; // Enable the button
+    }
+}
+
+// Attach the function to the change event of each checkbox
+contentOptions.forEach(function(checkbox) {
+    checkbox.addEventListener('change', checkContentOptions);
+});
+
+// Initial check to set the correct state on page load
+checkContentOptions();

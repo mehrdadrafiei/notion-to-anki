@@ -14,6 +14,7 @@ class BlockType(Enum):
     PARAGRAPH = auto()
     CODE = auto()
     QUOTE = auto()
+    TOGGLE = auto()
 
     @classmethod
     def is_heading(cls, block_type: 'BlockType') -> bool:

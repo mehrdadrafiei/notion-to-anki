@@ -196,7 +196,9 @@ class FlashcardCreator:
                 card.back = summary
 
             # Append URL to back content
-            card.back += f'\n\n URL: <a href="{item["url"]}">Link</a>'
+            if config.include_urls:
+                card.back += f'\n\n URL: <a href="{item["url"]}">Link</a>'
+
             return card
 
         except (FlashcardValidationError, ChatBotError) as e:

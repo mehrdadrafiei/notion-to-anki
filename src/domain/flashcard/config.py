@@ -31,6 +31,7 @@ class FlashcardGenerationConfig:
     include_checklists: bool = True
     include_headings: bool = True
     include_bullets: bool = True
+    include_toggles: bool = True
 
     def get_summary_prompt(self, text: str) -> str:
         """Generate appropriate prompt based on summary length setting."""

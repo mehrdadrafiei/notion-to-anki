@@ -10,6 +10,7 @@ from src.core.config import settings
 from src.core.error_handling import handle_exceptions, handle_service_errors
 from src.core.exceptions.base import ExternalServiceError, ResourceNotFoundError, ValidationError
 from src.core.exceptions.domain import NotionAuthenticationError, NotionContentError, NotionError
+from src.domain.flashcard.config import FlashcardGenerationConfig
 
 from .models import BlockType, NotionBlock, NotionPage
 
@@ -82,7 +83,20 @@ class NotionService:
         except APIResponseError as e:
             raise ExternalServiceError("Notion", "Failed to retrieve page URL", {"error": str(e)})
 
-    async def get_page_content(self, page_id_or_url: str) -> NotionPage:
+    def get_flashcard_included_blocks(self, config: FlashcardGenerationConfig) -> List[BlockType]:
+        """
+        Returns a list of BlockType objects that should be included in the generated flashcards.
+        """
+        block_list = []
+
+        if config.include_bullets:
+            block_list.append("bulleted_list_item")
+        if config.include_toggles:
+            block_list.append("toggle")
+
+        return block_list
+
+    async def get_page_content(self, page_id_or_url: str, config: FlashcardGenerationConfig) -> NotionPage:
         """
         Retrieve and process all content from a Notion page.
 
@@ -97,6 +111,7 @@ class NotionService:
         """
         page_id = self.extract_page_id(page_id_or_url)
         url = await self.get_page_url(page_id)
+        included_blocks = self.get_flashcard_included_blocks(config)
 
         if not url:
             raise ResourceNotFoundError("Notion page", page_id)
@@ -116,6 +131,9 @@ class NotionService:
                 if block.get('has_children'):
                     # Get the text from the root block
                     block_type = block['type']
+                    if block_type not in included_blocks:
+                        continue
+
                     front_text = NotionBlock._extract_rich_text(block[block_type].get('rich_text', []))
 
                     # Get all nested blocks

@@ -68,22 +68,21 @@
                         <label class="block font-medium text-gray-700">Flashcard Front</label>
                         <div class="space-y-2">
                             <div class="custom-checkbox">
-                                <input id="includeToggles" type="checkbox" checked>
+                                <input id="includeToggles" type="checkbox" class="content-option" checked>
                                 <label for="includeToggles">Include Toggles</label>
                             </div>
                             <div class="custom-checkbox">
-                                <input id="includeHeadings" type="checkbox">
-                                <label for="includeHeadings">Include Headings</label>
-                            </div>
-                            <div class="custom-checkbox">
-                                <input id="includeBullets" type="checkbox">
+                                <input id="includeBullets" type="checkbox" class="content-option">
                                 <label for="includeBullets">Include Bullets</label>
+                            </div>
+                            <div id="selection-message" class="hidden text-red-500 text-sm mt-2">
+                                Please select at least one content option.
                             </div>
                         </div>
                     </div>
 
                     <!-- Submit Button -->
-                    <button type="submit" class="w-full">
+                    <button id="generateButton" type="submit" class="w-full">
                         Generate Flashcards
                     </button>
                 </form>

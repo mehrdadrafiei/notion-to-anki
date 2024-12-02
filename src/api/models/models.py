@@ -21,6 +21,7 @@ class FlashcardRequest(BaseModel):
     include_checklists: bool = Field(True)
     include_headings: bool = Field(True)
     include_bullets: bool = Field(True)
+    include_toggles: bool = Field(True)
     max_cards: Optional[int] = Field(None)
 
     @field_validator("chatbot_type")
