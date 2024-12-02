@@ -1,13 +1,13 @@
 import asyncio
 import logging
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from notion_client import AsyncClient
-from notion_client.errors import APIResponseError, HTTPResponseError
+from notion_client.errors import APIResponseError
 
 from src.core.config import settings
-from src.core.error_handling import handle_exceptions, handle_service_errors
+from src.core.error_handling import handle_service_errors
 from src.core.exceptions.base import ExternalServiceError, ResourceNotFoundError, ValidationError
 from src.core.exceptions.domain import NotionAuthenticationError, NotionContentError, NotionError
 from src.domain.flashcard.config import FlashcardGenerationConfig
@@ -20,94 +20,109 @@ logger = logging.getLogger(__name__)
 class NotionService:
     """Service class for interacting with Notion API."""
 
+    URL_PATTERN = re.compile(r"[a-f0-9]{32}")
+    PAGE_ID_PATTERN = re.compile(r"^[a-f0-9]{32}$")
+    NOTION_URL_PREFIX = ("https://www.notion.so/", "https://notion.so/")
+
     def __init__(self, api_key: Optional[str] = None):
-        """Initialize NotionService with API key."""
+        """Initialize NotionService with API key.
+
+        Args:
+            api_key: Optional API key override. If not provided, uses settings.
+
+        Raises:
+            NotionAuthenticationError: If authentication fails
+        """
         try:
             self.client = AsyncClient(auth=api_key or settings.notion_api_key)
             self._url_cache: Dict[str, str] = {}
         except Exception as e:
             raise NotionAuthenticationError() from e
 
-    @staticmethod
-    def extract_page_id(page_id_or_url: str) -> str:
-        """
-        Extract the page ID from a Notion page URL or return the input if it's already a page ID.
+    def extract_page_id(self, page_id_or_url: str) -> str:
+        """Extract page ID from a Notion page URL or validate existing page ID.
 
         Args:
-            page_id_or_url (str): Notion page ID or URL
+            page_id_or_url: Notion page ID or URL
 
         Returns:
-            str: Extracted page ID
+            Extracted or validated page ID
 
         Raises:
-            ValidationError: If the input is invalid
+            ValidationError: If input format is invalid
         """
         if not page_id_or_url:
             raise ValidationError("Page ID or URL cannot be empty", "page_id_or_url")
 
-        if page_id_or_url.startswith(("https://www.notion.so/", "https://notion.so/")):
-            match = re.search(r"[a-f0-9]{32}", page_id_or_url)
-            if match:
+        if page_id_or_url.startswith(self.NOTION_URL_PREFIX):
+            if match := self.URL_PATTERN.search(page_id_or_url):
                 return match.group()
             raise ValidationError("Invalid Notion URL format", "page_id_or_url")
 
-        if not re.match(r"^[a-f0-9]{32}$", page_id_or_url):
+        if not self.PAGE_ID_PATTERN.match(page_id_or_url):
             raise ValidationError("Invalid page ID format", "page_id_or_url")
 
         return page_id_or_url
 
     @handle_service_errors(default_return_value=None)
     async def get_page_url(self, page_id: str) -> Optional[str]:
-        """
-        Retrieve the URL of the Notion page.
+        """Retrieve the URL of a Notion page.
 
         Args:
-            page_id (str): Notion page ID
+            page_id: Notion page ID
 
         Returns:
-            Optional[str]: The URL of the page or None if retrieval fails
+            Page URL if found, None otherwise
 
         Raises:
-            NotionError: If there's an error communicating with Notion API
+            ExternalServiceError: If API request fails
+            NotionError: If URL not found in response
         """
-        if page_id in self._url_cache:
-            return self._url_cache[page_id]
+        if url := self._url_cache.get(page_id):
+            return url
 
         try:
             page_content = await self.client.pages.retrieve(page_id=page_id)
-            url = page_content.get("url")
-            if url:
+            if url := page_content.get("url"):
                 self._url_cache[page_id] = url
                 return url
             raise NotionError("Page URL not found in response", {"page_id": page_id})
         except APIResponseError as e:
             raise ExternalServiceError("Notion", "Failed to retrieve page URL", {"error": str(e)})
 
-    def get_flashcard_included_blocks(self, config: FlashcardGenerationConfig) -> List[BlockType]:
-        """
-        Returns a list of BlockType objects that should be included in the generated flashcards.
-        """
-        block_list = []
-
-        if config.include_bullets:
-            block_list.append("bulleted_list_item")
-        if config.include_toggles:
-            block_list.append("toggle")
-
-        return block_list
-
-    async def get_page_content(self, page_id_or_url: str, config: FlashcardGenerationConfig) -> NotionPage:
-        """
-        Retrieve and process all content from a Notion page.
+    def get_flashcard_included_blocks(self, config: FlashcardGenerationConfig) -> Set[str]:
+        """Get block types to include in flashcard generation.
 
         Args:
-            page_id_or_url (str): Notion page ID or URL
+            config: Flashcard generation configuration
 
         Returns:
-            NotionPage: Processed page content
+            Set of block type identifiers to include
+        """
+        included_blocks = set()
+
+        if config.include_bullets:
+            included_blocks.add("bulleted_list_item")
+        if config.include_toggles:
+            included_blocks.add("toggle")
+
+        return included_blocks
+
+    async def get_page_content(self, page_id_or_url: str, config: FlashcardGenerationConfig) -> NotionPage:
+        """Retrieve and process content from a Notion page.
+
+        Args:
+            page_id_or_url: Notion page ID or URL
+            config: Flashcard generation configuration
+
+        Returns:
+            Processed page content
 
         Raises:
-            Various exceptions based on the error type
+            ResourceNotFoundError: If page not found
+            NotionContentError: If page has no valid content
+            NotionAuthenticationError: If authentication fails
+            NotionError: For other Notion-related errors
         """
         page_id = self.extract_page_id(page_id_or_url)
         url = await self.get_page_url(page_id)
@@ -117,35 +132,8 @@ class NotionService:
             raise ResourceNotFoundError("Notion page", page_id)
 
         try:
-            # Get root blocks
-            response = await self.client.blocks.children.list(page_id)
-            root_blocks = response.get('results', [])
-
-            if not root_blocks:
-                raise NotionContentError("Page has no content", page_id)
-
-            processed_blocks = []
-
-            # Process each root block
-            for block in root_blocks:
-                if block.get('has_children'):
-                    # Get the text from the root block
-                    block_type = block['type']
-                    if block_type not in included_blocks:
-                        continue
-
-                    front_text = NotionBlock._extract_rich_text(block[block_type].get('rich_text', []))
-
-                    # Get all nested blocks
-                    nested_content = await self._get_nested_content(block['id'])
-
-                    if processed_block := NotionBlock(
-                        type=BlockType.PARAGRAPH,
-                        text=front_text,
-                        url=f"{url}#{block['id'].replace('-', '')}",
-                        nested_text=nested_content,
-                    ):
-                        processed_blocks.append(processed_block)
+            blocks = await self._get_root_blocks(page_id)
+            processed_blocks = await self._process_blocks(blocks, url, included_blocks)
 
             if not processed_blocks:
                 raise NotionContentError("No valid blocks found in page", page_id)
@@ -153,58 +141,163 @@ class NotionService:
             return NotionPage(id=page_id, url=url, blocks=processed_blocks)
 
         except APIResponseError as e:
-            if e.status == 401:
-                raise NotionAuthenticationError()
-            elif e.status == 404:
-                raise ResourceNotFoundError("Notion page", page_id)
-            else:
-                raise ExternalServiceError("Notion", str(e), {"status": e.status})
+            self._handle_api_error(e, page_id)
         except Exception as e:
             raise NotionError(str(e), {"page_id": page_id})
 
-    async def _get_nested_content(self, block_id: str) -> str:
+    async def _get_root_blocks(self, page_id: str) -> List[Dict]:
+        """Retrieve root-level blocks from a Notion page.
+
+        Args:
+            page_id: Notion page ID
+
+        Returns:
+            List of root blocks
+
+        Raises:
+            NotionContentError: If page has no content
         """
-        Get all nested content for a block and format it as markdown.
+        response = await self.client.blocks.children.list(page_id)
+        blocks = response.get('results', [])
+
+        if not blocks:
+            raise NotionContentError("Page has no content", page_id)
+
+        return blocks
+
+    async def _process_blocks(self, blocks: List[Dict], url: str, included_blocks: Set[str]) -> List[NotionBlock]:
+        """Process blocks and their nested content.
+
+        Args:
+            blocks: List of blocks to process
+            url: Base URL for block references
+            included_blocks: Set of block types to include
+
+        Returns:
+            List of processed NotionBlock objects
+        """
+        processed_blocks = []
+
+        for block in blocks:
+            if not block.get('has_children'):
+                continue
+
+            block_type = block['type']
+            if block_type not in included_blocks:
+                continue
+
+            front_text = NotionBlock._extract_rich_text(block[block_type].get('rich_text', []))
+            nested_content = await self._get_nested_content(block['id'])
+
+            if processed_block := NotionBlock(
+                type=BlockType.PARAGRAPH,
+                text=front_text,
+                url=f"{url}#{block['id'].replace('-', '')}",
+                nested_text=nested_content,
+            ):
+                processed_blocks.append(processed_block)
+
+        return processed_blocks
+
+    async def _get_nested_content(self, block_id: str) -> str:
+        """Get nested content for a block formatted as markdown.
+
+        Args:
+            block_id: Block ID to get nested content for
+
+        Returns:
+            Formatted markdown string of nested content
         """
         try:
-            response = await self.client.blocks.children.list(block_id)
-            blocks = response.get('results', [])
-
-            content_parts = []
-            numbered_list_count = 1
-
-            for block in blocks:
-                block_type = block['type']
-
-                # Extract text based on block type
-                if block_type == 'bulleted_list_item':
-                    text = NotionBlock._extract_rich_text(block['bulleted_list_item'].get('rich_text', []))
-                    content_parts.append(f"* {text}")
-
-                elif block_type == 'numbered_list_item':
-                    text = NotionBlock._extract_rich_text(block['numbered_list_item'].get('rich_text', []))
-                    content_parts.append(
-                        f"{numbered_list_count}. {text}"
-                    )  # Markdown will handle numbering automatically
-                    numbered_list_count += 1
-
-                elif block_type == 'paragraph':
-                    text = NotionBlock._extract_rich_text(block['paragraph'].get('rich_text', []))
-                    content_parts.append(text)
-
-                elif block_type == 'code':
-                    text = NotionBlock._extract_rich_text(block['code'].get('rich_text', []))
-                    language = block['code'].get('language', '')
-                    content_parts.append(f"```{language}\n{text}\n```")
-
-                # If this nested block has its own children, get them too
-                if block.get('has_children'):
-                    nested_text = await self._get_nested_content(block['id'])
-                    if nested_text:
-                        content_parts.append(nested_text)
-
-            return '\n'.join(content_parts)
-
+            blocks = await self._get_child_blocks(block_id)
+            return self._format_nested_blocks(blocks)
         except Exception as e:
             logger.error(f"Error getting nested content for block {block_id}: {str(e)}")
             return ""
+
+    async def _get_child_blocks(self, block_id: str) -> List[Dict]:
+        """Retrieve child blocks for a given block.
+
+        Args:
+            block_id: Parent block ID
+
+        Returns:
+            List of child blocks
+        """
+        response = await self.client.blocks.children.list(block_id)
+        return response.get('results', [])
+
+    def _format_nested_blocks(self, blocks: List[Dict]) -> str:
+        """Format nested blocks into markdown.
+
+        Args:
+            blocks: List of blocks to format
+
+        Returns:
+            Formatted markdown string
+        """
+        content_parts = []
+        numbered_list_count = 1
+
+        for block in blocks:
+            block_type = block['type']
+            formatted_text = self._format_block(block, block_type, numbered_list_count)
+
+            if formatted_text:
+                content_parts.append(formatted_text)
+                if block_type == 'numbered_list_item':
+                    numbered_list_count += 1
+
+            if block.get('has_children'):
+                nested_text = asyncio.run(self._get_nested_content(block['id']))
+                if nested_text:
+                    content_parts.append(nested_text)
+
+        return '\n'.join(content_parts)
+
+    def _format_block(self, block: Dict, block_type: str, list_count: int) -> Optional[str]:
+        """Format a single block into markdown.
+
+        Args:
+            block: Block to format
+            block_type: Type of block
+            list_count: Current numbered list counter
+
+        Returns:
+            Formatted markdown string or None if block type not supported
+        """
+        text = NotionBlock._extract_rich_text(block[block_type].get('rich_text', []))
+
+        if not text:
+            return None
+
+        format_map = {
+            'bulleted_list_item': lambda t: f"* {t}",
+            'numbered_list_item': lambda t: f"{list_count}. {t}",
+            'paragraph': lambda t: t,
+            'code': lambda t: f"```{block['code'].get('language', '')}\n{t}\n```",
+        }
+
+        if formatter := format_map.get(block_type):
+            return formatter(text)
+
+        return None
+
+    def _handle_api_error(self, error: APIResponseError, page_id: str) -> None:
+        """Handle Notion API errors appropriately.
+
+        Args:
+            error: API error to handle
+            page_id: Related page ID
+
+        Raises:
+            NotionAuthenticationError: For authentication errors
+            ResourceNotFoundError: For not found errors
+            ExternalServiceError: For other API errors
+        """
+        if error.status == 401:
+            raise NotionAuthenticationError()
+        elif error.status == 404:
+            raise ResourceNotFoundError("Notion page", page_id)
+        else:
+            raise ExternalServiceError("Notion", str(error), {"status": error.status})
