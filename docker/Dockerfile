@@ -6,7 +6,7 @@ WORKDIR /app
 COPY requirements/ requirements/
 
 # Install base and API requirements
-RUN pip install --no-cache-dir -r requirements/base.txt -r requirements/api.txt
+RUN pip install --no-cache-dir -r requirements/base.txt
 
 # Copy the application code
 COPY . .
